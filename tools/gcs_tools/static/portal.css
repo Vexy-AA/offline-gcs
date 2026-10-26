@@ -1,0 +1,80 @@
+/* Front page: a legend-style launcher. Group names sit in a left column like
+   the legend of a chart; the pictograms are the only decoration. */
+
+.top .summary { margin: 0; font-weight: 600; font-size: 15px; text-align: right; }
+
+.portal { padding-top: 26px; padding-bottom: 56px; }
+
+.group {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 14px 28px;
+  padding: 22px 0;
+  border-top: 1px solid var(--line);
+}
+.group:first-child { border-top: 0; padding-top: 6px; }
+.group h2 { font-size: 21px; padding-top: 6px; }
+
+.apps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+}
+
+.app {
+  display: flex; flex-direction: column;
+  padding: 14px 16px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  color: var(--ink);
+  text-decoration: none;
+  transition: border-color .15s ease;
+}
+.app:hover { border-color: var(--ink-2); color: var(--ink); }
+.app:hover .name { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; text-decoration-color: var(--accent); }
+.app .pic { display: block; width: 100%; max-width: 180px; height: auto; margin: 0 0 12px -4px; }
+.app .name { font: 600 21px/1.2 var(--head); }
+.app .desc { margin-top: 4px; color: var(--ink-2); font-size: 15px; line-height: 1.4; }
+.app .state { margin-top: auto; padding-top: 12px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.app .state.st-ok { color: var(--ok); }
+.app .state.st-fail { color: var(--fail); }
+.app .state.st-warn { color: var(--warn); }
+.app .state.st-data, .app .state.st-local { font-weight: 500; }
+
+.app-hero { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 6px 22px; align-items: center; }
+.app-hero .pic { max-width: 400px; margin: 0; }
+.app-hero .app-text { display: flex; flex-direction: column; height: 100%; justify-content: center; }
+.app-hero .name { font-size: 27px; }
+.app-hero .desc { font-size: 16px; }
+.app-hero .state { margin-top: 10px; }
+
+/* pictograms */
+.pic .k, .pic .a, .pic .l { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.pic .k { stroke: var(--ink); stroke-width: 2; }
+.pic .k.thin { stroke-width: 1.3; }
+.pic .a { stroke: var(--accent); stroke-width: 2.6; }
+.pic .l { stroke: var(--line); stroke-width: 1.5; }
+.pic .dash { stroke-dasharray: 5 4; }
+.pic .f { fill: #fff; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round; }
+.pic .fs { fill: rgba(142, 44, 111, 0.16); stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
+.pic .fl { fill: #D6E1E6; }
+.pic .fa { fill: var(--accent); }
+.pic .fk { fill: var(--ink); }
+.pic .fw { fill: #fff; }
+.pic .fo { fill: var(--ok); }
+
+@media (max-width: 900px) {
+  .group { grid-template-columns: 1fr; gap: 12px; }
+  .group h2 { padding-top: 0; }
+}
+@media (max-width: 640px) {
+  .app-hero { grid-column: auto; grid-template-columns: 1fr; }
+  .top { flex-wrap: wrap; }
+  .top .summary { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app { transition: none; }
+}
+.top .summary.st-ok { color: var(--ok); }
+.top .summary.st-fail { color: var(--fail); }

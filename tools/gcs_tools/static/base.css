@@ -1,0 +1,82 @@
+/* Shared look of the ground station pages. Palette from aeronautical charts: pale chart paper,
+   slate ink, chart magenta for actions; status colours always come with words. */
+
+@font-face { font-family: "Barlow"; font-weight: 400; font-display: swap; src: url("fonts/barlow-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 500; font-display: swap; src: url("fonts/barlow-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 600; font-display: swap; src: url("fonts/barlow-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-weight: 600; font-display: swap; src: url("fonts/barlow-semi-condensed-latin-600-normal.woff2") format("woff2"); }
+
+:root {
+  --paper: #E9EEF0;
+  --panel: #F7F9FA;
+  --ink: #1D2B33;
+  --ink-2: #4E606A;
+  --line: #9FB2BC;
+  --line-soft: #CBD7DD;
+  --accent: #8E2C6F;
+  --accent-dark: #6F1F56;
+  --ok: #2E7D4F;
+  --warn: #9A6414;
+  --fail: #B3263E;
+  --info: #4A6B7C;
+  --mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  --body: "Barlow", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --head: "Barlow Semi Condensed", "Barlow", "Arial Narrow", sans-serif;
+  --gutter: clamp(16px, 3vw, 32px);
+}
+
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 16px/1.5 var(--body);
+  -webkit-font-smoothing: antialiased;
+  font-variant-ligatures: no-contextual;  /* keep "--" in commands as two hyphens */
+}
+h1, h2, h3 { font-family: var(--head); font-weight: 600; line-height: 1.2; margin: 0; }
+code { font-family: var(--mono); font-size: 0.86em; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { color: var(--accent-dark); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+/* ---------- top bar ---------- */
+.top {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.brand h1 { font-size: 25px; letter-spacing: 0.005em; }
+.host { margin: 0; color: var(--ink-2); font-size: 14px; }
+.top-actions { display: flex; align-items: center; gap: 10px; }
+
+.btn {
+  font: 500 15px/1 var(--body);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--ink-2); }
+.btn:disabled { opacity: 0.55; cursor: progress; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; padding: 11px 18px; }
+.btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+.btn-small { font-size: 14px; padding: 5px 10px; }
+.btn-danger { color: var(--fail); }
+
+.jobchip {
+  font: 500 14px/1 var(--body); color: var(--accent-dark);
+  background: transparent; border: 1px dashed var(--accent); border-radius: 4px;
+  padding: 8px 12px; cursor: pointer;
+}
+
+main { padding: 0 var(--gutter) 48px; max-width: 1280px; margin: 0 auto; }
+.note { color: var(--ink-2); font-size: 14px; margin: 10px 0 0; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.back { font-size: 15px; }

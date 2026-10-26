@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elevation viewer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 24c5-9 9-13 13-13s8 4 13 13' fill='none' stroke='%238E2C6F' stroke-width='3'/%3E%3Cpath d='M3 29c5-6 9-9 13-9s8 3 13 9' fill='none' stroke='%231D2B33' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/base.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/static/elevation.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Elevation viewer</h1>
+      <a class="back" href="/">All apps</a>
+    </div>
+    <label class="base-pick">Imagery
+      <select id="base"></select>
+    </label>
+  </header>
+
+  <main class="ev">
+    <div id="map" class="map" aria-label="Map"></div>
+
+    <aside class="panel" aria-label="Elevation tools">
+      <fieldset class="modes">
+        <legend>Click on the map to</legend>
+        <label><input type="radio" name="mode" value="point" checked> Read a height</label>
+        <label><input type="radio" name="mode" value="profile"> Draw a profile</label>
+        <label><input type="radio" name="mode" value="area"> Shade an area</label>
+      </fieldset>
+      <p class="hint" id="hint"></p>
+
+      <section id="out-point">
+        <ol class="points" id="points"></ol>
+      </section>
+
+      <section id="out-profile" hidden>
+        <div class="row">
+          <button type="button" class="btn btn-primary" id="prof-go" disabled>Show profile</button>
+          <button type="button" class="btn" id="prof-clear">Clear</button>
+        </div>
+        <div id="prof-chart" class="chart"></div>
+        <dl class="stats" id="prof-stats"></dl>
+      </section>
+
+      <section id="out-area" hidden>
+        <div class="row">
+          <button type="button" class="btn" id="area-clear">Clear</button>
+          <label class="opacity">Opacity <input type="range" id="area-opacity" min="0.2" max="1" step="0.05" value="0.85"></label>
+        </div>
+        <div class="legend" id="area-legend" hidden>
+          <span class="ramp"></span>
+          <span class="lo" id="area-lo"></span><span class="hi" id="area-hi"></span>
+        </div>
+        <dl class="stats" id="area-stats"></dl>
+      </section>
+
+      <p class="msg" id="msg" role="status" aria-live="polite"></p>
+
+      <fieldset class="layers">
+        <legend>Show on the map</legend>
+        <label><input type="checkbox" id="lay-pieces" checked> <span class="sw sw-pieces"></span> Elevation data (pieces)</label>
+        <label><input type="checkbox" id="lay-terrain" checked> <span class="sw sw-terrain"></span> 3D terrain area</label>
+      </fieldset>
+      <p class="note">Heights come from the elevation API (data/elevation). 0 m usually means there is no data at that point.</p>
+    </aside>
+  </main>
+
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/elevation.js"></script>
+</body>
+</html>

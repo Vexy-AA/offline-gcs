@@ -1,0 +1,5 @@
+# Python packages not provided by Ubuntu 24.04 (GDAL and numpy come from apt, see Dockerfile).
+# Hash-pinned wheels for CPython 3.12 on x86_64 and arm64 Linux.
+pydelatin==0.4.0 \
+    --hash=sha256:8a61e337ef238a98d84f6152943d62de3d9e377df01dc6c6b3d200626981e8a5 \
+    --hash=sha256:8bd458a9d0882bf6e1ee5bf254976b70bc8ae56bf406c03008b6211dc5b4966e

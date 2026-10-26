@@ -1,0 +1,64 @@
+/* Elevation viewer: map on the left, readouts on the right. */
+
+body { display: flex; flex-direction: column; min-height: 100vh; }
+.top { flex: none; }
+.base-pick { font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+.base-pick select, .ev select {
+  font: 400 15px var(--body); color: var(--ink);
+  background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px;
+}
+
+/* full width: override the centred, padded <main> from base.css */
+.ev { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 0;
+      width: 100%; max-width: none; margin: 0; padding: 0; }
+.map { min-height: 420px; height: 100%; background: #DDE6EA; }
+.leaflet-container { font-family: var(--body); background: #DDE6EA; }
+.leaflet-container a { color: var(--accent); }
+.leaflet-tooltip { font-family: var(--body); }
+
+.panel { border-left: 1px solid var(--line); background: var(--panel); padding: 18px 18px 28px; overflow-y: auto; }
+.panel fieldset { border: 0; padding: 0; margin: 0 0 14px; }
+.panel legend { font: 600 18px/1.2 var(--head); margin-bottom: 8px; padding: 0; }
+.modes label, .layers label { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 15px; }
+.modes input, .layers input { accent-color: var(--accent); }
+.hint { margin: 0 0 12px; color: var(--ink-2); font-size: 15px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.opacity { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+
+.points { list-style: none; margin: 0 0 12px; padding: 0; }
+.points li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line-soft); font-size: 15px; }
+.points .h { font-weight: 600; }
+.points .ll { color: var(--ink-2); font-size: 14px; }
+
+.chart svg { display: block; width: 100%; height: auto; }
+.chart .area { fill: #D6E1E6; }
+.chart .line { fill: none; stroke: var(--ink); stroke-width: 1.6; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart text { font: 12px var(--body); fill: var(--ink-2); }
+.chart .cross { stroke: var(--accent); stroke-width: 1.2; }
+.chart .dot { fill: var(--accent); }
+.chart .readout { font-weight: 600; fill: var(--ink); }
+
+.stats { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 10px 0 0; font-size: 15px; }
+.stats dt { color: var(--ink-2); }
+.stats dd { margin: 0; font-weight: 500; }
+
+.legend { position: relative; margin: 4px 0 18px; }
+.legend .ramp { display: block; height: 12px; border-radius: 2px; border: 1px solid var(--line);
+  background: linear-gradient(90deg, #4F8A5B, #A9BC74 30%, #E1CF93 55%, #BB8E62 80%, #F3EFEA); }
+.legend .lo, .legend .hi { position: absolute; top: 15px; font-size: 13px; color: var(--ink-2); }
+.legend .lo { left: 0; }
+.legend .hi { right: 0; }
+
+.msg { min-height: 1.4em; margin: 6px 0 14px; font-size: 15px; }
+.msg.err { color: var(--fail); font-weight: 500; }
+.sw { display: inline-block; width: 18px; height: 12px; border: 2px dashed; border-radius: 2px; }
+.sw-pieces { border-color: var(--accent); }
+.sw-terrain { border-color: var(--ok); }
+
+@media (max-width: 860px) {
+  .ev { grid-template-columns: 1fr; }
+  .map { height: 60vh; }
+  .panel { border-left: 0; border-top: 1px solid var(--line); }
+  .top { flex-wrap: wrap; }
+}

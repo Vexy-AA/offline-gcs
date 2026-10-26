@@ -1,0 +1,6 @@
+[submodule "open-elevation"]
+	path = open-elevation
+	url = https://github.com/Vexy-AA/open-elevation.git
+[submodule "webtools"]
+	path = webtools
+	url = https://github.com/Vexy-AA/WebTools.git

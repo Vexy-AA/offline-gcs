@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run the data-preparation tools in their Docker image (no local GDAL needed).
+#
+#   ./gcs-tools mbtiles   ~/maps/ortho.tif   data/mbtiles/custom.mbtiles
+#   ./gcs-tools terrain   ~/dem/area.tif     data/terrain
+#   ./gcs-tools elevation ~/dem/area.tif
+#   ./gcs-tools check-terrain data/terrain --dem ~/dem/area.tif
+#   ./gcs-tools check                  health of every running server
+#   ./gcs-tools --help            ./gcs-tools terrain --help
+#
+# Input files can be anywhere on this machine: their folders are mounted at the
+# same path inside the container (read-only). This repository is mounted
+# read-write, so write outputs under data/ here. Files are created as your user.
+set -euo pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cwd="$(pwd)"
+
+declare -A mode=()   # host dir -> ro|rw
+want() {             # want <dir> <ro|rw>; rw wins over ro
+  local d="$1"
+  case "$d/" in "$repo"/*) return ;; esac
+  if [[ "${mode[$d]:-}" != rw ]]; then mode[$d]="$2"; fi
+}
+
+case "$cwd/" in "$repo"/*) ;; *) want "$cwd" rw ;; esac
+for arg in "$@"; do
+  [[ "$arg" == -* ]] && continue
+  if [[ -d "$arg" ]]; then
+    want "$(cd "$arg" && pwd)" ro
+  elif [[ -e "$arg" ]]; then
+    want "$(cd "$(dirname "$arg")" && pwd)" ro
+  elif [[ "$arg" == */* && -d "$(dirname "$arg")" ]]; then
+    want "$(cd "$(dirname "$arg")" && pwd)" rw    # output file outside the repo
+  fi
+done
+
+mounts=(-v "$repo:$repo")
+for d in "${!mode[@]}"; do mounts+=(-v "$d:$d:${mode[$d]}"); done
+
+exec docker compose --project-directory "$repo" -f "$repo/docker-compose.yml" \
+  run --rm --no-deps --user "$(id -u):$(id -g)" -w "$cwd" "${mounts[@]}" tools "$@"

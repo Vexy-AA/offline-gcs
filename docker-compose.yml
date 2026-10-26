@@ -1,0 +1,100 @@
+# Offline ground-station stack: UAVLogViewer + tiles + terrain + WebTools + elevation.
+# All ports bind on 0.0.0.0, so every service is reachable from the local network.
+
+services:
+
+  # ---- Raster imagery (XYZ tiles from ./data/mbtiles/*.mbtiles) -------------
+  # LAN URL: http://<host>:8000/services/custom/tiles/{z}/{x}/{y}.png
+  # List:    http://<host>:8000/services
+  mbtiles:
+    image: ghcr.io/consbio/mbtileserver:latest
+    restart: unless-stopped
+    # A tile the file doesn't have (e.g. zoom 15-17 when the imagery stops at 14)
+    # answers 404 instead of a blank PNG, so Cesium falls back to enlarging the
+    # parent tile rather than drawing nothing.
+    command: ["--missing-image-tile-404"]
+    environment:
+      PORT: 8000
+      TILE_DIR: /tilesets
+      # Load new or replaced .mbtiles files without a restart.
+      ENABLE_FS_WATCH: "true"
+    volumes:
+      - ./data/mbtiles:/tilesets:ro
+    ports:
+      - "8000:8000"
+
+  # ---- Cesium quantized-mesh terrain (./data/terrain/layer.json + 0/ 1/ ...) --
+  # LAN URL: http://<host>:8011/quantized/layer.json
+  terrain:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./terrain/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./data/terrain:/usr/share/nginx/html/quantized:ro
+    ports:
+      - "8011:80"
+
+  # ---- UAVLogViewer (release v1.0.3 of Vexy-AA/UAVLogViewer, see logviewer/Dockerfile)
+  # URL: http://<host>:8080/
+  # Proxies /tiles/ -> mbtiles and /quantized/ -> terrain (same-origin, no CORS).
+  logviewer:
+    build: ./logviewer
+    image: offline-gcs-logviewer:v1.0.3
+    restart: unless-stopped
+    depends_on:
+      - mbtiles
+      - terrain
+    volumes:
+      - ./logviewer/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./logviewer/runtime-config.js:/usr/share/nginx/html/runtime-config.js:ro
+    ports:
+      - "8080:80"
+
+  # ---- ArduPilot WebTools (static; ./webtools = git clone --recurse-submodules)
+  # URL: http://<host>:8090/
+  webtools:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./webtools-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./webtools:/usr/share/nginx/html:ro
+    ports:
+      - "8090:80"
+
+  # ---- open-elevation (your fork, built from ./open-elevation) ---------------
+  # URL: http://<host>:8082/elevation/v1/ele/?points=44.6,33.5
+  #      http://<host>:8082/elevation/v1/ele/carpet?points=44.6,33.5,44.61,33.51
+  elevation:
+    build:
+      context: ./open-elevation
+      dockerfile: ./docker/Dockerfile
+    image: offline-gcs-elevation
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: 1
+    command: stdbuf -i0 -o0 -e0 python3 server.py
+    volumes:
+      - ./data/elevation:/code/data/elevation   # rw: server writes summary.json here
+    ports:
+      - "8082:8080"
+
+  # ---- Front page + tools: http://<host>/ ------------------------------------
+  # Front page with every app, the data tools (/tools), the elevation viewer
+  # (/elevation) and the DataFlash log splitter (/log-splitter).
+  # Port 80 taken on this machine? Set GCS_HTTP_PORT=8095 in a .env file.
+  # Same image is the command line: ./gcs-tools <command>  (see tools/README.md)
+  tools:
+    build: ./tools
+    image: offline-gcs-tools:1.1.0
+    restart: unless-stopped
+    command: ["serve", "--port", "8095"]
+    volumes:
+      - ./data:/data
+      - ./open-elevation:/opt/open-elevation:ro   # for create-tiles.sh
+      # Lets the page show container status and logs, and restart the elevation
+      # server after new pieces are built. It also gives this container control
+      # over Docker: delete the line if that is not acceptable on your network
+      # (the page then tells you which server to restart by hand).
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "${GCS_HTTP_PORT:-80}:8095"

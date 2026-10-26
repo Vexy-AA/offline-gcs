@@ -1,0 +1,14 @@
+# Map/terrain/elevation data is big and machine-specific: keep it out of git.
+# The data/* folders themselves are kept (via .gitkeep) so the bind mounts exist.
+/data/**
+!/data/
+!/data/*/
+!/data/*/.gitkeep
+/data/.work/
+
+# The log viewer comes from a GitHub release (logviewer/Dockerfile), not from git
+/logviewer/dist/
+*.tar.gz
+
+__pycache__/
+*.pyc

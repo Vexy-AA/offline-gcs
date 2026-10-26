@@ -1,0 +1,1836 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DataFlash Log Splitter</title>
+<style>
+/* Layout: ground-station column — file bar, full-width timeline (parts / modes / events / field lanes / data rate),
+   then parts list beside export options. Instrument-panel neutrals with a cobalt accent and an amber selection. */
+:root {
+  --bg: #eef1f5;
+  --surface: #fbfcfd;
+  --ink: #17202b;
+  --muted: #5a6577;
+  --line: #d3d9e2;
+  --grid: #e4e8ee;
+  --accent: #1f5bc4;
+  --accent-ink: #ffffff;
+  --sel: #b86e00;
+  --selfill: rgba(219, 145, 22, 0.15);
+  --armed: rgba(28, 140, 70, 0.10);
+  --armed-line: #1d7f46;
+  --rate: #7088a8;
+  --ok: #1d7f46;
+  --warn: #9a5b00;
+  --warn-bg: #fdf0d8;
+  --crit: #c0352b;
+  --crit-bg: #fbe3e0;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --m1: #2a78d6; --m2: #eb6834; --m3: #1baf7a; --m4: #eda100;
+  --m5: #e87ba4; --m6: #008300; --m7: #6250d6; --m8: #e34948;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 6px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141a; --surface: #161d26; --ink: #e2e8f0; --muted: #94a1b4; --line: #2a3542; --grid: #212b37;
+    --accent: #5b95f0; --accent-ink: #0d1520; --sel: #f0a63a; --selfill: rgba(240, 166, 58, 0.16);
+    --armed: rgba(70, 200, 120, 0.10); --armed-line: #57c487; --rate: #7d93b3;
+    --ok: #57c487; --warn: #f0a63a; --warn-bg: #3a2a10; --crit: #ff7b6e; --crit-bg: #3d1c1a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --m1: #3987e5; --m2: #d95926; --m3: #199e70; --m4: #c98500;
+    --m5: #d55181; --m6: #008300; --m7: #9085e9; --m8: #e66767;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f141a; --surface: #161d26; --ink: #e2e8f0; --muted: #94a1b4; --line: #2a3542; --grid: #212b37;
+  --accent: #5b95f0; --accent-ink: #0d1520; --sel: #f0a63a; --selfill: rgba(240, 166, 58, 0.16);
+  --armed: rgba(70, 200, 120, 0.10); --armed-line: #57c487; --rate: #7d93b3;
+  --ok: #57c487; --warn: #f0a63a; --warn-bg: #3a2a10; --crit: #ff7b6e; --crit-bg: #3d1c1a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --m1: #3987e5; --m2: #d95926; --m3: #199e70; --m4: #c98500;
+  --m5: #d55181; --m6: #008300; --m7: #9085e9; --m8: #e66767;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 32px;
+}
+[hidden] { display: none !important; }
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap { max-width: 1400px; margin: 0 auto; display: grid; gap: 14px; }
+.top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+  padding-block: 16px 4px;
+}
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand h1 { font-size: 19px; line-height: 1.2; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.brand .tag { font: 12px var(--font-mono); color: var(--muted); }
+.filebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  font: 12.5px var(--font-mono); padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip b { font: 600 10.5px var(--font-ui); letter-spacing: .06em; color: var(--warn); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--surface); cursor: pointer; white-space: nowrap; line-height: 1.3;
+}
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.small { padding: 3px 8px; font-size: 12.5px; }
+.btn.ghost { background: transparent; }
+select.sel, input.inp {
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+}
+input.inp.time { width: 8.5em; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+input.inp.short { width: 5em; font-family: var(--font-mono); }
+label.lbl { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.note { color: var(--muted); font-size: 12.5px; margin: 0; }
+
+.scan {
+  display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--surface);
+}
+.scan .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.bar { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+
+.summary {
+  display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+}
+.summary > div { background: var(--surface); padding: 8px 12px; min-width: 0; }
+.summary dt { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.summary dd { margin: 2px 0 0; font: 13.5px var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.summary .wide { grid-column: span 2; }
+@media (max-width: 1100px) { .summary { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: grid; gap: 10px; min-width: 0;
+}
+.panel h2 { font-size: 13px; margin: 0; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toolbar .grow { flex: 1 1 auto; }
+.serieschip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border: 1px solid var(--line);
+  border-radius: 999px; font: 12.5px var(--font-mono); background: var(--bg);
+}
+.serieschip .sw { width: 14px; height: 3px; border-radius: 2px; }
+.serieschip button { border: 0; background: transparent; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 14px; line-height: 1; }
+#seriesAdd { width: 15em; font-family: var(--font-mono); font-size: 12.5px; }
+
+.chartbox { position: relative; min-width: 0; }
+#main { display: block; width: 100%; touch-action: none; cursor: crosshair; }
+#overview { display: block; width: 100%; height: 44px; touch-action: none; cursor: grab; margin-top: 4px; }
+.tip {
+  position: absolute; pointer-events: none; z-index: 5; min-width: 150px; max-width: 320px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 7px 9px; font-size: 12px;
+}
+.tip .t { font: 600 12px var(--font-mono); margin-bottom: 3px; }
+.tip .r { display: flex; justify-content: space-between; gap: 12px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tip .r span:first-child { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.tip .r i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; }
+.tip .m { color: var(--muted); margin-top: 4px; border-top: 1px solid var(--line); padding-top: 4px; overflow-wrap: anywhere; }
+.tip .m.err { color: var(--crit); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+
+.selrow {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 12px;
+  border: 1px dashed var(--line); border-radius: var(--radius);
+}
+.selrow .stat { font: 13px var(--font-mono); font-variant-numeric: tabular-nums; }
+.selrow .actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.badge {
+  display: inline-flex; align-items: center; gap: 4px; font: 600 11px var(--font-ui); letter-spacing: .02em;
+  padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+}
+.badge.warn { color: var(--warn); background: var(--warn-bg); }
+.badge.crit { color: var(--crit); background: var(--crit-bg); }
+.badge.ok { color: var(--ok); background: var(--armed); }
+
+.cols { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 980px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+
+.auto { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; padding-bottom: 2px; }
+.auto .grp { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.tablewrap { overflow-x: auto; min-width: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+td.num, th.num { text-align: right; }
+tr.part { cursor: pointer; }
+tr.part:hover td { background: var(--bg); }
+tr.part.active td { background: var(--selfill); }
+tr.part input.name { width: 100%; min-width: 7em; border: 1px solid transparent; background: transparent; padding: 3px 5px; border-radius: 4px; }
+tr.part input.name:hover, tr.part input.name:focus { border-color: var(--line); background: var(--surface); }
+.idx { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); font: 600 11px var(--font-mono); }
+.rowact { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.prog { width: 70px; height: 4px; border-radius: 2px; background: var(--grid); overflow: hidden; }
+.prog i { display: block; height: 100%; background: var(--accent); width: 0; }
+.empty { color: var(--muted); padding: 14px 8px; text-align: center; }
+.foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.foot .grow { flex: 1; }
+
+.checks { display: grid; gap: 7px; }
+.checks label { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: start; cursor: pointer; }
+.checks label small { grid-column: 2; color: var(--muted); font-size: 12px; }
+.types { max-height: 380px; overflow: auto; border: 1px solid var(--grid); border-radius: var(--radius); }
+.types table { font-size: 12.5px; }
+.types th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.types td { padding: 4px 8px; }
+.types .barcell { width: 32%; }
+.types .mini { height: 6px; border-radius: 3px; background: var(--rate); opacity: .7; min-width: 1px; }
+.types tr.dropped td { color: var(--muted); }
+.types tr.dropped .tname span:not(.ninst) { text-decoration: line-through; }
+.types tr.irow td { background: var(--bg); }
+.types .tname { white-space: nowrap; }
+.types .exp { border: 0; background: transparent; color: var(--muted); cursor: pointer; width: 18px; padding: 0; margin-right: 2px; font-size: 12px; }
+.types .exp:hover { color: var(--ink); }
+.types .exp-pad { display: inline-block; width: 20px; }
+.types .ninst { margin-left: 6px; font: 11px var(--font-ui); color: var(--muted); }
+.types .sharewrap { display: flex; align-items: center; gap: 6px; }
+.types .sharewrap .num { font-size: 11px; color: var(--muted); }
+.types tr.dropped .mini { opacity: .25; }
+
+.status { min-height: 1.4em; font-size: 13px; color: var(--muted); }
+.status.err { color: var(--crit); }
+
+.dropzone {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--bg) 82%, transparent); border: 3px dashed var(--accent);
+  font-size: 20px; font-weight: 600; color: var(--accent);
+}
+details.help summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+details.help ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; display: grid; gap: 3px; }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>DataFlash Log Splitter</h1>
+      <span class="tag">ArduPilot .bin</span>
+    </div>
+    <div class="filebar">
+      <span class="chip" id="fileChip" title="">no log</span>
+      <label class="lbl" for="detail" title="How densely fields are sampled for the chart. Applies to the next file you open.">Chart detail
+        <select id="detail" class="sel">
+          <option value="1000000">1 s</option>
+          <option value="500000">0.5 s</option>
+          <option value="250000" selected>0.25 s</option>
+          <option value="100000">0.1 s</option>
+        </select>
+      </label>
+      <label class="btn primary" for="fileInput" tabindex="0" id="openBtn">Open .bin log…</label>
+      <input type="file" id="fileInput" accept=".bin,.BIN,.log,.LOG" hidden>
+    </div>
+  </header>
+  <p class="note">The log is read in your browser, in chunks, straight from disk. Nothing is uploaded. Drop a file anywhere on this page to open it.</p>
+
+  <section class="scan" id="scanBox" hidden aria-live="polite">
+    <div class="row">
+      <strong id="scanTitle">Reading log…</strong>
+      <span class="num" id="scanText"></span>
+      <button class="btn small ghost" id="scanCancel" type="button">Cancel</button>
+    </div>
+    <div class="bar"><i id="scanBar"></i></div>
+  </section>
+
+  <dl class="summary" id="summary"></dl>
+
+  <section class="panel" aria-label="Timeline">
+    <div class="toolbar">
+      <div class="toolbar" id="seriesChips"></div>
+      <input class="inp" id="seriesAdd" list="seriesList" placeholder="Add field, e.g. BARO.Alt" autocomplete="off" spellcheck="false">
+      <datalist id="seriesList"></datalist>
+      <span class="grow"></span>
+      <button class="btn small" id="zoomSel" type="button">Zoom to selection</button>
+      <button class="btn small" id="zoomAll" type="button">Show whole log</button>
+    </div>
+    <div class="chartbox" id="chartBox">
+      <canvas id="main" aria-label="Log timeline: drag to select a time range"></canvas>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+    <canvas id="overview" aria-label="Whole-log overview: drag to move the zoomed window"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--armed);outline:1px solid var(--armed-line)"></i>Armed</span>
+      <span><i style="background:var(--selfill);outline:1px solid var(--sel)"></i>Selection</span>
+      <span><i style="background:var(--rate);opacity:.6"></i>Log write rate (bytes per second)</span>
+      <span><i style="background:var(--muted);width:2px"></i>Text message (MSG)</span>
+      <span><i style="background:var(--crit);width:2px"></i>Error (ERR)</span>
+    </div>
+    <div class="selrow" id="selRow">
+      <label class="lbl" for="selStart">Start <input class="inp time" id="selStart" placeholder="m:ss.s"></label>
+      <label class="lbl" for="selEnd">End <input class="inp time" id="selEnd" placeholder="m:ss.s"></label>
+      <span class="stat" id="selDur">–</span>
+      <span class="stat" id="selSize">–</span>
+      <span id="selBadge"></span>
+      <div class="actions">
+        <button class="btn" id="selAll" type="button" disabled>Select whole log</button>
+        <button class="btn" id="addSeg" type="button" disabled>Add as part</button>
+        <button class="btn primary" id="saveSel" type="button" disabled>Save selection…</button>
+      </div>
+    </div>
+    <details class="help">
+      <summary>Chart controls</summary>
+      <ul>
+        <li>Drag across the chart to select a time range. Drag the amber edges to adjust it. Select whole log takes everything, for saving the full log without the unticked message types.</li>
+        <li>Scroll to zoom around the pointer. Double-click to show the whole log. Drag the strip under the chart to pan.</li>
+        <li>Click a numbered bar in the top row, or a row in the parts list, to load that part into the selection.</li>
+        <li>Cuts snap to message boundaries every 32 KB of log, which is a few tens of milliseconds at full logging rate.</li>
+      </ul>
+    </details>
+  </section>
+
+  <div class="cols">
+    <section class="panel" aria-label="Parts">
+      <h2>Parts</h2>
+      <div class="auto">
+        <span class="grp">
+          <button class="btn small" id="autoArm" type="button">Split at arm / disarm</button>
+          <label class="lbl" for="armPad">margin <input class="inp short" id="armPad" value="10" inputmode="decimal"> s</label>
+        </span>
+        <span class="grp">
+          <button class="btn small" id="autoSize" type="button">Split by size</button>
+          <label class="lbl" for="maxMB">max <input class="inp short" id="maxMB" value="1400" inputmode="numeric"> MB</label>
+        </span>
+        <button class="btn small ghost" id="clearParts" type="button">Clear</button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>#</th><th>Name</th><th class="num">Start</th><th class="num">End</th><th class="num">Length</th><th class="num">Size</th><th></th></tr></thead>
+          <tbody id="partsBody"></tbody>
+        </table>
+      </div>
+      <div class="foot">
+        <span class="note grow" id="partsNote"></span>
+        <button class="btn primary" id="saveAll" type="button" disabled>Save all parts…</button>
+      </div>
+      <div class="status" id="status" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" aria-label="Export options">
+      <h2>Each part also gets</h2>
+      <div class="checks">
+        <label><input type="checkbox" checked disabled> Format, unit and multiplier definitions
+          <small>All FMT / FMTU / UNIT / MULT written before the cut, including formats that ArduPilot emits lazily mid-log.</small></label>
+        <label><input type="checkbox" id="optParams" checked> Parameters
+          <small>Latest value of every PARM before the cut.</small></label>
+        <label><input type="checkbox" id="optMsgs" checked> Firmware version and text messages
+          <small>VER and MSG. Log viewers read the vehicle type from MSG.</small></label>
+        <label><input type="checkbox" id="optMission" checked> Mission and rally points
+          <small>Latest CMD per item number and RALY per point.</small></label>
+        <label><input type="checkbox" id="optState" checked> Flight mode and arm state at the cut
+          <small>Last MODE, ARM and arming EV before the cut.</small></label>
+        <label><input type="checkbox" id="optOrigin" checked> EKF origin
+          <small>Last ORGN of each type.</small></label>
+        <label><input type="checkbox" id="optRetime" checked> Stamp carried messages with the part's start time
+          <small>Otherwise their boot-time stamps stretch the part's timeline back to power-on.</small></label>
+      </div>
+      <h2>Message types</h2>
+      <p class="note">Sorted by share of the file. Untick a type to leave it out of everything you save. Types logged per sensor show ▸; open it to untick single instances. Instances are numbered as in the log, from 0, so IMU[3] is the fourth IMU. Raw IMU and batch-sampler data (IMU, GYR, ACC, ISBD) are often most of a full-logging file.</p>
+      <p class="note" id="exclNote" aria-live="polite"></p>
+      <div class="types" id="typesBox">
+        <table>
+          <thead><tr><th>Keep</th><th>Type</th><th class="num">Count</th><th class="num">Size</th><th class="barcell">Share</th></tr></thead>
+          <tbody id="typesBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+<div class="dropzone" id="dropzone" hidden>Drop the .bin log to open it</div>
+
+<script id="df-core">
+/*CORE-START*/
+const DF = (() => {
+  'use strict';
+  const H1 = 0xA3, H2 = 0x95;
+  const SZ = { a: 64, b: 1, B: 1, h: 2, H: 2, i: 4, I: 4, f: 4, d: 8, n: 4, N: 16, Z: 64, c: 2, C: 2, e: 4, E: 4, L: 4, M: 1, q: 8, Q: 8, g: 2 };
+  const NUMERIC = 'bBhHiIfdcCeELMqQg';
+  const INST1 = 'bBM'; // instance columns are one-byte integers in ArduPilot logs
+  // Messages kept for carrying over into split parts. key: column used to keep only the latest record.
+  const META = { FMT: 'Type', FMTU: 'FmtType', UNIT: 'Id', MULT: 'Id', PARM: 'Name', MSG: null, VER: '', MODE: '', ARM: '', EV: '', CMD: 'CNum', RALY: 'Seq', ORGN: 'Type' };
+  const SPECIAL = { FMT: 1, FMTU: 2, UNIT: 3, MSG: 4, MODE: 5, ARM: 6, EV: 7, ERR: 8 };
+  const CORE_TYPES = new Set(['FMT', 'FMTU', 'UNIT', 'MULT', 'PARM']);
+
+  function halfToFloat(h) {
+    const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, f = h & 0x3ff;
+    if (e === 0) return s * Math.pow(2, -14) * (f / 1024);
+    if (e === 31) return f ? NaN : s * Infinity;
+    return s * Math.pow(2, e - 15) * (1 + f / 1024);
+  }
+  function readNum(dv, o, ch) {
+    switch (ch) {
+      case 'b': return dv.getInt8(o);
+      case 'B': case 'M': return dv.getUint8(o);
+      case 'h': return dv.getInt16(o, true);
+      case 'H': return dv.getUint16(o, true);
+      case 'i': return dv.getInt32(o, true);
+      case 'I': return dv.getUint32(o, true);
+      case 'f': return dv.getFloat32(o, true);
+      case 'd': return dv.getFloat64(o, true);
+      case 'c': return dv.getInt16(o, true) * 0.01;
+      case 'C': return dv.getUint16(o, true) * 0.01;
+      case 'e': return dv.getInt32(o, true) * 0.01;
+      case 'E': return dv.getUint32(o, true) * 0.01;
+      case 'L': return dv.getInt32(o, true) * 1e-7;
+      case 'q': return dv.getInt32(o + 4, true) * 4294967296 + dv.getUint32(o, true);
+      case 'Q': return dv.getUint32(o + 4, true) * 4294967296 + dv.getUint32(o, true);
+      case 'g': return halfToFloat(dv.getUint16(o, true));
+    }
+    return NaN;
+  }
+  function readStr(buf, o, n) {
+    let s = '';
+    for (let i = 0; i < n; i++) { const c = buf[o + i]; if (!c) break; s += String.fromCharCode(c); }
+    return s;
+  }
+
+  function makeFmt(type, len, name, format, columns) {
+    const cols = columns ? columns.split(',') : [];
+    const f = { type, len, name, format, cols, off: [], ch: [], idx: Object.create(null), valid: true,
+      timeOff: -1, timeKind: 0, instOff: -1, instCh: '', instCol: -1, units: '', num: [], streams: new Map(), stream: null,
+      special: SPECIAL[name] || 0, meta: Object.prototype.hasOwnProperty.call(META, name) };
+    let o = 3;
+    for (let i = 0; i < format.length; i++) {
+      const ch = format[i], s = SZ[ch];
+      if (s === undefined) { f.valid = false; break; }
+      f.off.push(o); f.ch.push(ch);
+      if (i < cols.length) f.idx[cols[i]] = i;
+      o += s;
+    }
+    if (f.valid && o > len) f.valid = false; // format longer than the declared length: don't trust field offsets
+    if (!f.valid) return f;
+    const ti = f.idx.TimeUS;
+    if (ti !== undefined && (f.ch[ti] === 'Q' || f.ch[ti] === 'q')) { f.timeOff = f.off[ti]; f.timeKind = 0; }
+    else if (f.idx.TimeMS !== undefined && (f.ch[f.idx.TimeMS] === 'I' || f.ch[f.idx.TimeMS] === 'i')) { f.timeOff = f.off[f.idx.TimeMS]; f.timeKind = 1; }
+    for (let i = 0; i < f.ch.length; i++) {
+      if (NUMERIC.includes(f.ch[i]) && cols[i] !== 'TimeUS' && cols[i] !== 'TimeMS' && cols[i] !== undefined) f.num.push(i);
+    }
+    for (const nm of ['I', 'Instance', 'Inst', 'C']) {
+      const i = f.idx[nm];
+      if (i !== undefined && INST1.includes(f.ch[i])) { setInst(f, i); break; }
+    }
+    return f;
+  }
+  function setInst(f, i) {
+    if (i < 0) { f.instOff = -1; f.instCh = ''; f.instCol = -1; return; }
+    f.instOff = f.off[i]; f.instCh = f.ch[i]; f.instCol = i;
+    f.num = f.num.filter(k => k !== i);
+  }
+  function colVal(f, buf, dv, p, name) {
+    const i = f.idx[name];
+    if (i === undefined) return undefined;
+    const ch = f.ch[i];
+    if (ch === 'n') return readStr(buf, p + f.off[i], 4);
+    if (ch === 'N') return readStr(buf, p + f.off[i], 16);
+    if (ch === 'Z') return readStr(buf, p + f.off[i], 64);
+    if (ch === 'a') return '';
+    return readNum(dv, p + f.off[i], ch);
+  }
+
+  function grow(arr, n) { const a = new arr.constructor(n); a.set(arr); return a; }
+  function newStream(ix, f, inst) {
+    const s = { f, name: f.name, inst, n: 0, cap: 512, next: -Infinity, t: new Float64Array(512), v: f.num.map(() => new Float32Array(512)) };
+    if (inst >= 0) f.streams.set(inst, s); else f.stream = s;
+    ix.streams.push(s);
+    return s;
+  }
+  function addSample(s, dv, p, t) {
+    if (s.n === s.cap) {
+      s.cap *= 2; s.t = grow(s.t, s.cap);
+      for (let k = 0; k < s.v.length; k++) s.v[k] = grow(s.v[k], s.cap);
+    }
+    const f = s.f, num = f.num;
+    s.t[s.n] = t;
+    for (let k = 0; k < num.length; k++) { const i = num[k]; s.v[k][s.n] = readNum(dv, p + f.off[i], f.ch[i]); }
+    s.n++;
+  }
+
+  function vehicleFrom(text) {
+    const m = /\b(ArduCopter|ArduHeli|ArduPlane|ArduRover|APMrover2|ArduSub|AntennaTracker|Blimp)\b/i.exec(text);
+    if (!m) return '';
+    const v = m[1].toLowerCase();
+    if (v.includes('copter') || v.includes('heli')) return 'copter';
+    if (v.includes('plane')) return 'plane';
+    if (v.includes('rover')) return 'rover';
+    if (v.includes('sub')) return 'sub';
+    if (v.includes('tracker')) return 'tracker';
+    return 'blimp';
+  }
+
+  function handleSpecial(ix, f, buf, dv, p, t) {
+    if (!f.valid) return;
+    switch (f.special) {
+      case 1: { // FMT
+        const ty = buf[p + 3], len = buf[p + 4];
+        const name = readStr(buf, p + 5, 4), format = readStr(buf, p + 9, 16), cols = readStr(buf, p + 25, 64);
+        const old = ix.fmts[ty];
+        if (old && old.name === name && old.format === format && old.len === len) return;
+        if (ty === 128 && len !== 89) return; // never let a corrupt record redefine FMT itself
+        ix.fmts[ty] = makeFmt(ty, len, name, format, cols);
+        return;
+      }
+      case 2: { // FMTU: units tell which column is the instance ('#')
+        const ty = colVal(f, buf, dv, p, 'FmtType'), units = colVal(f, buf, dv, p, 'UnitIds');
+        const tf = ix.fmts[ty];
+        if (!tf || !tf.valid || typeof units !== 'string') return;
+        tf.units = units;
+        if (tf.streams.size || tf.stream) return; // data already sampled with the earlier instance guess
+        const hash = units.indexOf('#');
+        if (hash >= 0 && hash < tf.ch.length && INST1.includes(tf.ch[hash])) {
+          if (tf.instCol >= 0 && tf.instCol !== hash) tf.num = rebuildNum(tf);
+          setInst(tf, hash);
+        } else if (tf.instCol >= 0) { setInst(tf, -1); tf.num = rebuildNum(tf); }
+        return;
+      }
+      case 3: { const id = colVal(f, buf, dv, p, 'Id'), lab = colVal(f, buf, dv, p, 'Label'); if (typeof id === 'number') ix.units[String.fromCharCode(id)] = lab; return; }
+      case 4: { // MSG
+        const text = colVal(f, buf, dv, p, 'Message') || '';
+        if (ix.msgs.length < 50000) ix.msgs.push({ t, text });
+        if (!ix.firmware) { const v = vehicleFrom(text); if (v) { ix.vehicle = v; ix.firmware = text; } }
+        if (!ix.frame && /^Frame:/.test(text)) ix.frame = text.replace(/^Frame:\s*/, '');
+        return;
+      }
+      case 5: ix.modes.push({ t, mode: colVal(f, buf, dv, p, 'Mode'), rsn: colVal(f, buf, dv, p, 'Rsn') }); return;
+      case 6: ix.arms.push({ t, armed: colVal(f, buf, dv, p, 'ArmState') !== 0 }); return;
+      case 7: { const id = colVal(f, buf, dv, p, 'Id'); if (id === 10 || id === 11) ix.evArms.push({ t, armed: id === 10 }); return; }
+      case 8: if (ix.errs.length < 20000) ix.errs.push({ t, sub: colVal(f, buf, dv, p, 'Subsys'), code: colVal(f, buf, dv, p, 'ECode') }); return;
+    }
+  }
+  function rebuildNum(f) {
+    const out = [];
+    for (let i = 0; i < f.ch.length; i++) if (NUMERIC.includes(f.ch[i]) && f.cols[i] !== 'TimeUS' && f.cols[i] !== 'TimeMS' && f.cols[i] !== undefined) out.push(i);
+    return out;
+  }
+
+  /** Each (message type, instance) pair gets a small integer id: counts, estimates and filters work on these. */
+  function newKey(ix, typ, inst, slot) {
+    const id = ix.keys.length;
+    ix.keys.push({ id, type: typ, inst, slot });
+    if (id >= ix.kc.length) ix.kc = grow(ix.kc, ix.kc.length * 2);
+    ix.keySlot[slot] = id;
+    return id;
+  }
+  function slotOf(f, buf, p) { return f.type * 257 + (f.instOff >= 0 ? 1 + buf[p + f.instOff] : 0); }
+
+  function addMeta(ix, f, buf, dv, p, abs, kid) {
+    if (!f.valid) return;
+    const keyCol = META[f.name];
+    let key;
+    if (f.name === 'EV') { const id = colVal(f, buf, dv, p, 'Id'); if (id !== 10 && id !== 11) return; key = 'arm'; }
+    else if (keyCol === null) key = ix.meta.length;
+    else if (keyCol === '') key = '';
+    else { key = colVal(f, buf, dv, p, keyCol); if (key === undefined) key = ix.meta.length; }
+    ix.meta.push({ off: abs, cat: f.name, key, kid, bytes: buf.slice(p, p + f.len), timeOff: f.timeOff, timeKind: f.timeKind });
+  }
+
+  /**
+   * Stream through the whole file once. Never holds more than one chunk in memory.
+   * Returns an index: formats, cut points (offset/time every ~32 KB), decimated field samples, events, metadata records.
+   */
+  async function scan(file, opt = {}) {
+    const sampleUs = opt.sampleUs || 250000;
+    const CH = opt.chunk || (16 << 20), OV = 1024, CP_STEP = opt.cpStep || 32768;
+    const size = file.size;
+    const fmts = new Array(256).fill(null);
+    fmts[128] = makeFmt(128, 89, 'FMT', 'BBnNZ', 'Type,Length,Name,Format,Columns');
+    const ix = {
+      file, name: file.name || 'log.bin', size, fmts, counts: new Float64Array(256), nMsgs: 0, bad: 0,
+      cpOff: new Float64Array(4096), cpT: new Float64Array(4096), cpN: 0, snaps: [{ off: 0, kc: new Float64Array(0) }],
+      keys: [], kc: new Float64Array(256), keySlot: new Int32Array(256 * 257).fill(-1),
+      streams: [], modes: [], arms: [], evArms: [], msgs: [], errs: [], meta: [], units: Object.create(null),
+      tMin: Infinity, tMax: -Infinity, firmware: '', vehicle: '', frame: '', sampleUs, seconds: 0
+    };
+    let lastCpOff = -Infinity, lastCpT = -Infinity, tGood = -1, candT = -1, candType = -1, inSync = true;
+    const keySlot = ix.keySlot; let kc = ix.kc;
+    const started = Date.now();
+    let pos = 0;
+    while (pos < size) {
+      if (opt.isCancelled && opt.isCancelled()) throw new Error('cancelled');
+      const end = Math.min(size, pos + CH + OV);
+      const ab = await file.slice(pos, end).arrayBuffer();
+      const buf = new Uint8Array(ab), dv = new DataView(ab), n = buf.length;
+      const atEOF = end === size;
+      const lim = atEOF ? n : CH;
+      const relaxFrom = atEOF ? n - 1024 : Infinity;
+      let p = 0;
+      // syncEnd: where the last accepted message ended. A message starting there is trusted as-is;
+      // after skipping junk, a candidate must also be followed by another header before we trust it.
+      let syncEnd = inSync ? 0 : -1;
+      while (p < lim) {
+        if (buf[p] !== H1 || buf[p + 1] !== H2) {
+          let q = buf.indexOf(H1, p + 1);
+          if (q < 0 || q > lim) q = lim;
+          ix.bad += q - p; p = q; continue;
+        }
+        const typ = buf[p + 2];
+        const f = fmts[typ];
+        if (f === null) { ix.bad++; p++; continue; }
+        const L = f.len;
+        if (L < 3) { ix.bad++; p++; continue; }
+        if (p + L > n) { ix.bad += n - p; p = n; break; }
+        if (p !== syncEnd && p + L + 1 < n && (buf[p + L] !== H1 || buf[p + L + 1] !== H2) && p < relaxFrom) { ix.bad++; p++; continue; }
+        syncEnd = p + L;
+        const abs = pos + p;
+        let slot = typ * 257, iv = -1;
+        const io = f.instOff;
+        if (io >= 0) { const raw = buf[p + io]; slot += 1 + raw; iv = f.instCh === 'b' ? (raw << 24) >> 24 : raw; }
+        let kid = keySlot[slot];
+        if (kid < 0) { kid = newKey(ix, typ, iv, slot); kc = ix.kc; }
+        kc[kid]++;
+        let t = -1;
+        if (f.timeOff >= 0 && f.valid) {
+          const o = p + f.timeOff;
+          t = f.timeKind === 0 ? dv.getUint32(o + 4, true) * 4294967296 + dv.getUint32(o, true) : dv.getUint32(o, true) * 1000;
+          // Guard the time base against a corrupt record: a big forward jump must be confirmed by a different message type.
+          if (tGood < 0) { if (t > 1e13) t = -1; else tGood = t; }
+          else if (t < tGood - 60e6) t = -1;
+          else if (t > tGood + 60e6) {
+            if (candT >= 0 && typ !== candType && Math.abs(t - candT) < 60e6) { tGood = Math.max(t, candT); candT = -1; }
+            else { candT = t; candType = typ; t = -1; }
+          } else { if (t > tGood) tGood = t; candT = -1; }
+          if (t >= 0) {
+            if (t < ix.tMin) ix.tMin = t;
+            if (t > ix.tMax) ix.tMax = t;
+            if (abs - lastCpOff >= CP_STEP) {
+              const ct = t > lastCpT ? t : lastCpT;
+              if (ix.cpN === ix.cpOff.length) { ix.cpOff = grow(ix.cpOff, ix.cpN * 2); ix.cpT = grow(ix.cpT, ix.cpN * 2); }
+              ix.cpOff[ix.cpN] = abs; ix.cpT[ix.cpN] = ct; ix.cpN++;
+              lastCpOff = abs; lastCpT = ct;
+            }
+          }
+        }
+        if (f.special !== 0) handleSpecial(ix, f, buf, dv, p, t);
+        if (f.meta) addMeta(ix, f, buf, dv, p, abs, kid);
+        if (t >= 0 && f.num.length !== 0) {
+          let s;
+          if (f.instOff >= 0) {
+            s = f.streams.get(iv);
+            if (s === undefined) s = newStream(ix, f, iv);
+          } else s = f.stream || newStream(ix, f, -1);
+          if (t >= s.next) { s.next = t + sampleUs; addSample(s, dv, p, t); }
+        }
+        p += L;
+      }
+      inSync = p === syncEnd;
+      pos += p;
+      ix.snaps.push({ off: pos, kc: ix.kc.slice(0, ix.keys.length) });
+      if (opt.onProgress) opt.onProgress(pos / size, ix);
+    }
+    ix.cpOff = ix.cpOff.slice(0, ix.cpN); ix.cpT = ix.cpT.slice(0, ix.cpN);
+    for (const k of ix.keys) { ix.counts[k.type] += ix.kc[k.id]; ix.nMsgs += ix.kc[k.id]; }
+    if (!isFinite(ix.tMin)) { ix.tMin = 0; ix.tMax = 0; }
+    ix.seconds = (Date.now() - started) / 1000;
+    finalize(ix);
+    return ix;
+  }
+
+  function finalize(ix) {
+    const src = ix.arms.length ? ix.arms : ix.evArms;
+    const iv = []; let cur = null;
+    for (const e of src) {
+      if (e.t < 0) continue;
+      if (e.armed && !cur) cur = { t0: e.t, t1: ix.tMax };
+      else if (!e.armed && cur) { cur.t1 = e.t; iv.push(cur); cur = null; }
+    }
+    if (cur) iv.push(cur);
+    ix.armed = iv;
+    const modes = ix.modes.filter(m => m.t >= 0);
+    ix.modeSpans = modes.map((m, i) => ({ t0: m.t, t1: i + 1 < modes.length ? modes[i + 1].t : ix.tMax, mode: m.mode }));
+    const multi = new Map();
+    for (const s of ix.streams) multi.set(s.f, (multi.get(s.f) || 0) + 1);
+    ix.series = [];
+    for (const s of ix.streams) {
+      const many = multi.get(s.f) > 1;
+      s.f.num.forEach((ci, k) => {
+        const col = s.f.cols[ci];
+        const uch = s.f.units ? s.f.units[ci] : '';
+        const unit = uch && uch !== '-' && ix.units[uch] ? ix.units[uch] : '';
+        ix.series.push({ id: s.name + (many ? '[' + s.inst + ']' : '') + '.' + col, stream: s, k, unit });
+      });
+    }
+    ix.series.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    ix.kc = ix.kc.slice(0, ix.keys.length);
+    const byType = new Map();
+    for (const k of ix.keys) {
+      const f = ix.fmts[k.type]; if (!f) continue;
+      let ts = byType.get(k.type);
+      if (!ts) { ts = { type: k.type, name: f.name, count: 0, bytes: 0, core: CORE_TYPES.has(f.name), keys: [] }; byType.set(k.type, ts); }
+      const c = ix.kc[k.id];
+      ts.count += c; ts.bytes += c * f.len;
+      ts.keys.push({ kid: k.id, inst: k.inst, count: c, bytes: c * f.len, label: k.slot % 257 !== 0 ? `${f.name}[${k.inst}]` : f.name, hasInst: k.slot % 257 !== 0 });
+    }
+    ix.typeStats = [...byType.values()].filter(t => t.count > 0);
+    for (const ts of ix.typeStats) ts.keys.sort((a, b) => a.inst - b.inst);
+    ix.typeStats.sort((a, b) => b.bytes - a.bytes);
+  }
+
+  /** First cut point (message boundary) whose time is >= t. Start and end use the same rule so adjacent parts tile exactly. */
+  function cutAt(ix, t, isEnd) {
+    const n = ix.cpN, T = ix.cpT, O = ix.cpOff;
+    if (!isEnd && (n === 0 || t <= T[0])) return { off: 0, t: ix.tMin };
+    if (isEnd && t >= ix.tMax) return { off: ix.size, t: ix.tMax };
+    let lo = 0, hi = n;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (T[m] < t) lo = m + 1; else hi = m; }
+    if (lo >= n) return { off: ix.size, t: ix.tMax };
+    return { off: O[lo], t: T[lo] };
+  }
+  function cutRange(ix, t0, t1) {
+    const a = cutAt(ix, t0, false), b = cutAt(ix, t1, true);
+    if (b.off < a.off) return { a: a.off, b: a.off, tA: a.t, tB: a.t };
+    return { a: a.off, b: b.off, tA: a.t, tB: b.t };
+  }
+
+  function countAt(ix, off, kid) {
+    const S = ix.snaps;
+    let lo = 0, hi = S.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (S[m].off <= off) lo = m; else hi = m - 1; }
+    const s0 = S[lo], s1 = S[Math.min(lo + 1, S.length - 1)];
+    const c0 = kid < s0.kc.length ? s0.kc[kid] : 0, c1 = kid < s1.kc.length ? s1.kc[kid] : 0;
+    if (s1 === s0 || s1.off === s0.off) return c0;
+    return c0 + (c1 - c0) * (off - s0.off) / (s1.off - s0.off);
+  }
+  /** Estimated bytes of data in [a,b) after dropping the excluded (type, instance) keys. */
+  function estimateBytes(ix, a, b, exclude) {
+    let bytes = b - a;
+    if (exclude && exclude.size) for (const kid of exclude) {
+      const k = ix.keys[kid], f = k && ix.fmts[k.type]; if (!f) continue;
+      bytes -= (countAt(ix, b, kid) - countAt(ix, a, kid)) * f.len;
+    }
+    return Math.max(0, bytes);
+  }
+
+  /** Header block written in front of a part: the metadata records found before offset a. */
+  function buildHeader(ix, a, tA, opt = {}, exclude) {
+    if (a <= 0) return new Uint8Array(0);
+    const on = { FMT: 1, FMTU: 1, UNIT: 1, MULT: 1, PARM: opt.params !== false, VER: opt.msgs !== false, MSG: opt.msgs !== false,
+      CMD: opt.mission !== false, RALY: opt.mission !== false, MODE: opt.state !== false, ARM: opt.state !== false, EV: opt.state !== false, ORGN: opt.origin !== false };
+    const order = ['FMT', 'UNIT', 'MULT', 'FMTU', 'VER', 'MSG', 'PARM', 'CMD', 'RALY', 'ORGN', 'MODE', 'ARM', 'EV'];
+    const cats = Object.create(null);
+    for (const c of order) cats[c] = new Map();
+    for (const r of ix.meta) {
+      if (r.off >= a) break;
+      if (!on[r.cat]) continue;
+      if (exclude && exclude.has(r.kid)) continue;
+      cats[r.cat].set(r.key, r);
+    }
+    let msgs = [...cats.MSG.values()];
+    if (msgs.length > 600) msgs = msgs.slice(0, 100).concat(msgs.slice(-500));
+    const recs = [];
+    for (const c of order) recs.push(...(c === 'MSG' ? msgs : cats[c].values()));
+    let total = 0;
+    for (const r of recs) total += r.bytes.length;
+    const out = new Uint8Array(total), dv = new DataView(out.buffer);
+    let o = 0;
+    const stamp = Math.max(0, Math.floor(tA));
+    for (const r of recs) {
+      out.set(r.bytes, o);
+      if (opt.retime !== false && r.timeOff >= 0) {
+        if (r.timeKind === 0) { dv.setUint32(o + r.timeOff, stamp % 4294967296, true); dv.setUint32(o + r.timeOff + 4, Math.floor(stamp / 4294967296), true); }
+        else dv.setUint32(o + r.timeOff, Math.floor(stamp / 1000) >>> 0, true);
+      }
+      o += r.bytes.length;
+    }
+    return out;
+  }
+
+  /** Write header + [a,b) of the log to sink. With excluded types, re-frames the data and drops those messages. */
+  async function exportPart(ix, a, b, header, exclude, sink, onProgress, isCancelled) {
+    if (header.length) await sink.write(header);
+    const total = Math.max(1, b - a);
+    const STEP = 64 << 20;
+    if (!exclude || exclude.size === 0) {
+      for (let pos = a; pos < b; pos += STEP) {
+        if (isCancelled && isCancelled()) throw new Error('cancelled');
+        const e = Math.min(b, pos + STEP);
+        await sink.write(ix.file.slice(pos, e));
+        if (onProgress) onProgress((e - a) / total);
+      }
+      return;
+    }
+    const keep = new Uint8Array(256 * 257).fill(1);
+    for (const kid of exclude) { const k = ix.keys[kid]; if (k && !CORE_TYPES.has(ix.fmts[k.type].name)) keep[k.slot] = 0; }
+    const fm = ix.fmts, CH = 16 << 20, OV = 1024;
+    let pos = a, inSync = true; // a is always a message boundary
+    while (pos < b) {
+      if (isCancelled && isCancelled()) throw new Error('cancelled');
+      const end = Math.min(b, pos + CH + OV);
+      const buf = new Uint8Array(await ix.file.slice(pos, end).arrayBuffer());
+      const n = buf.length, last = end === b, lim = last ? n : CH;
+      const relaxFrom = (last && b === ix.size) ? n - 1024 : Infinity;
+      const parts = [];
+      let run = -1, p = 0, syncEnd = inSync ? 0 : -1;
+      while (p < lim) {
+        const f = buf[p] === H1 && buf[p + 1] === H2 ? fm[buf[p + 2]] : null;
+        if (f === null || f.len < 3) {
+          if (run >= 0) { parts.push(buf.subarray(run, p)); run = -1; }
+          let q = buf.indexOf(H1, p + 1); if (q < 0 || q > lim) q = lim; p = q; continue;
+        }
+        const L = f.len;
+        if (p + L > n) { p = n; break; }
+        if (p !== syncEnd && p + L + 1 < n && (buf[p + L] !== H1 || buf[p + L + 1] !== H2) && p < relaxFrom) {
+          if (run >= 0) { parts.push(buf.subarray(run, p)); run = -1; }
+          p++; continue;
+        }
+        syncEnd = p + L;
+        if (keep[slotOf(f, buf, p)]) { if (run < 0) run = p; }
+        else if (run >= 0) { parts.push(buf.subarray(run, p)); run = -1; }
+        p += L;
+      }
+      if (run >= 0) parts.push(buf.subarray(run, Math.min(p, n)));
+      if (parts.length) await sink.write(new Blob(parts));
+      inSync = p === syncEnd;
+      pos += p;
+      if (onProgress) onProgress(Math.min(1, (pos - a) / total));
+    }
+  }
+
+  /** Small synthetic ArduCopter log (two flights) so the page opens in a working state. */
+  function demoLog() {
+    let cap = 1 << 23, buf = new Uint8Array(cap), dv = new DataView(buf.buffer), n = 0;
+    const ensure = k => { if (n + k > cap) { cap *= 2; const nb = new Uint8Array(cap); nb.set(buf); buf = nb; dv = new DataView(buf.buffer); } };
+    const put = (ch, v) => {
+      switch (ch) {
+        case 'b': dv.setInt8(n, v); n += 1; break;
+        case 'B': case 'M': dv.setUint8(n, v); n += 1; break;
+        case 'h': dv.setInt16(n, v, true); n += 2; break;
+        case 'H': dv.setUint16(n, v, true); n += 2; break;
+        case 'i': dv.setInt32(n, v, true); n += 4; break;
+        case 'I': dv.setUint32(n, v >>> 0, true); n += 4; break;
+        case 'f': dv.setFloat32(n, v, true); n += 4; break;
+        case 'd': dv.setFloat64(n, v, true); n += 8; break;
+        case 'c': dv.setInt16(n, Math.round(v * 100), true); n += 2; break;
+        case 'C': dv.setUint16(n, Math.round(v * 100), true); n += 2; break;
+        case 'e': dv.setInt32(n, Math.round(v * 100), true); n += 4; break;
+        case 'L': dv.setInt32(n, Math.round(v * 1e7), true); n += 4; break;
+        case 'Q': case 'q': dv.setUint32(n, v % 4294967296, true); dv.setUint32(n + 4, Math.floor(v / 4294967296), true); n += 8; break;
+        case 'n': case 'N': case 'Z': { const sz = SZ[ch]; for (let i = 0; i < sz; i++) buf[n + i] = i < v.length ? v.charCodeAt(i) : 0; n += sz; break; }
+      }
+    };
+    const defs = Object.create(null);
+    let T = 0;
+    const D = (type, name, fmt, cols, units) => { let len = 3; for (const c of fmt) len += SZ[c]; defs[name] = { type, name, fmt, cols, units, len, done: false }; };
+    const raw = (type, fmt, vals) => { ensure(300); buf[n++] = H1; buf[n++] = H2; buf[n++] = type; for (let i = 0; i < fmt.length; i++) put(fmt[i], vals[i]); };
+    const W = (name, vals) => {
+      const d = defs[name];
+      if (!d.done) {
+        d.done = true;
+        if (name !== 'FMT') W('FMT', [d.type, d.len, d.name, d.fmt, d.cols]);
+        if (d.units && name !== 'FMTU') W('FMTU', [d.type, d.units, '-'.repeat(d.fmt.length)]);
+      }
+      raw(d.type, d.fmt, name === 'FMT' ? vals : [T, ...vals]);
+    };
+    D(128, 'FMT', 'BBnNZ', 'Type,Length,Name,Format,Columns');
+    D(32, 'PARM', 'QNff', 'TimeUS,Name,Value,Default', 's---');
+    D(33, 'MSG', 'QZ', 'TimeUS,Message', 's-');
+    D(34, 'UNIT', 'QbZ', 'TimeUS,Id,Label', 's--');
+    D(35, 'FMTU', 'QBNN', 'TimeUS,FmtType,UnitIds,MultIds', 's---');
+    D(36, 'MODE', 'QMBB', 'TimeUS,Mode,ModeNum,Rsn', 's---');
+    D(37, 'EV', 'QB', 'TimeUS,Id', 's-');
+    D(38, 'ARM', 'QBIBB', 'TimeUS,ArmState,ArmChecks,Forced,Method', 's----');
+    D(39, 'ERR', 'QBB', 'TimeUS,Subsys,ECode', 's--');
+    D(40, 'CMD', 'QHHHffffLLfB', 'TimeUS,CTot,CNum,CId,Prm1,Prm2,Prm3,Prm4,Lat,Lng,Alt,Frame', 's-------DUm-');
+    D(41, 'BARO', 'QBfffcfIffB', 'TimeUS,I,Alt,AltAMSL,Press,Temp,CRt,SMS,Offset,GndTemp,Health', 's#mmPOnsmO-');
+    D(42, 'POS', 'QLLfff', 'TimeUS,Lat,Lng,Alt,RelHomeAlt,RelOriginAlt', 'sDUmmm');
+    D(43, 'CTUN', 'Qffffffhh', 'TimeUS,ThI,ABst,ThO,ThH,DAlt,Alt,DCRt,CRt', 's----mmnn');
+    D(44, 'BAT', 'QBfffffcfB', 'TimeUS,Inst,Volt,VoltR,Curr,CurrTot,EnrgTot,Temp,Res,RemPct', 's#vvAaXOw%');
+    D(45, 'GPS', 'QBBIHBcLLeffff', 'TimeUS,I,Status,GMS,GWk,NSats,HDop,Lat,Lng,Alt,Spd,GCrs,VZ,Yaw', 's#-s-S-DUmnhnh');
+    D(46, 'ATT', 'QccccCC', 'TimeUS,DesRoll,Roll,DesPitch,Pitch,DesYaw,Yaw', 'sddddhh');
+    D(47, 'IMU', 'QBffffff', 'TimeUS,I,GyrX,GyrY,GyrZ,AccX,AccY,AccZ', 's#EEEooo');
+    D(48, 'RFND', 'QBfBBb', 'TimeUS,Instance,Dist,Stat,Orient,Quality', 's#m--%');
+    D(49, 'VER', 'QBHBBBBIZHBBII', 'TimeUS,BT,BST,Maj,Min,Pat,FWT,GH,FWS,APJ,BU,FV,IMI,ICI', 's-------------');
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+    T = 1.8e6;
+    W('FMT', [128, 89, 'FMT', 'BBnNZ', 'Type,Length,Name,Format,Columns']); defs.FMT.done = true;
+    for (const [id, lab] of [['s', 's'], ['m', 'm'], ['v', 'V'], ['A', 'A'], ['a', 'Ah'], ['n', 'm/s'], ['O', 'degC'], ['P', 'Pa'], ['%', '%'], ['E', 'rad/s'], ['o', 'm/s/s'], ['d', 'deg'], ['h', 'degheading'], ['D', 'deglatitude'], ['U', 'deglongitude'], ['S', 'satellites'], ['X', 'Wh'], ['w', 'Ohm'], ['#', 'instance']])
+      W('UNIT', [id.charCodeAt(0), lab]);
+    const params = { LOG_BITMASK: 655358, LOG_BACKEND_TYPE: 1, LOG_DISARMED: 0, LOG_FILE_DSRMROT: 0, FRAME_CLASS: 1, FRAME_TYPE: 1, INS_LOG_BAT_MASK: 1, INS_LOG_BAT_OPT: 4, ATC_RAT_RLL_P: 0.135, ATC_RAT_PIT_P: 0.135, ATC_RAT_YAW_P: 0.18, MOT_THST_HOVER: 0.31, BATT_MONITOR: 4, BATT_CAPACITY: 5200, FS_THR_ENABLE: 1, RTL_ALT: 3000, WPNAV_SPEED: 800, PILOT_SPEED_UP: 250, EK3_ENABLE: 1, AHRS_EKF_TYPE: 3, GPS_TYPE: 1, SERIAL1_PROTOCOL: 2, ARMING_CHECK: 1, FLTMODE1: 0, FLTMODE2: 2, FLTMODE3: 5, FLTMODE4: 3, FLTMODE5: 6, FLTMODE6: 9 };
+    W('MSG', ['ArduCopter V4.7.0-dev (0b6a14b0)']);
+    W('MSG', ['ChibiOS: 2025a3b1']);
+    W('MSG', ['CubeOrange 00340032 31315118 35353833']);
+    W('MSG', ['Frame: QUAD/X']);
+    W('VER', [3, 4, 4, 7, 0, 0, 0x0b6a14b0, 'ArduCopter V4.7.0-dev (0b6a14b0)', 140, 0, 0, 0, 0]);
+    for (const k in params) W('PARM', [k, params[k], params[k]]);
+    const home = [52.2297, 21.0122];
+    const wps = [[16, 0, 0, 0], [22, 0, 0, 25], [16, 0.0008, 0, 40], [16, 0.0016, 0.0006, 40], [16, 0.0008, 0.0012, 40], [20, 0, 0, 0]];
+    wps.forEach((w, i) => W('CMD', [wps.length, i, w[0], 0, 0, 0, 0, home[0] + w[1], home[1] + w[2], w[3], 3]));
+    W('MODE', [0, 0, 0]);
+    // flight plan: [t0, t1] armed; altitude profile and modes
+    const flights = [
+      { t0: 62, t1: 318, modes: [[62, 0], [70, 2], [95, 5], [140, 3], [262, 6], [300, 9]], peak: 40 },
+      { t0: 420, t1: 655, modes: [[420, 0], [428, 16], [470, 5], [520, 4], [600, 21], [640, 9]], peak: 28 }
+    ];
+    const end = 700;
+    let fi = 0, armed = false, modeIdx = 0, volt = 16.7, curTot = 0, rfndOn = false;
+    for (let step = 0; T < end * 1e6; step++) {
+      T = 1.8e6 + step * 20000; // 50 Hz base tick
+      const s = T / 1e6;
+      const fl = flights[fi];
+      if (fl && !armed && s >= fl.t0) { armed = true; modeIdx = 0; W('ARM', [1, 0x3ffff, 0, 2]); W('EV', [10]); }
+      if (fl && armed && modeIdx < fl.modes.length && s >= fl.modes[modeIdx][0]) {
+        const m = fl.modes[modeIdx][1]; W('MODE', [m, m, 1]); modeIdx++;
+        if (m === 3) W('MSG', ['Mission: 1 Takeoff']);
+        if (m === 6) W('MSG', ['Mission complete, changing mode to RTL']);
+      }
+      if (fl && armed && s >= fl.t1) { armed = false; W('EV', [11]); W('ARM', [0, 0x3ffff, 0, 2]); W('MSG', ['Disarming motors']); fi++; }
+      let alt = 0;
+      if (armed && fl) {
+        const u = (s - fl.t0) / (fl.t1 - fl.t0);
+        alt = fl.peak * Math.min(1, u * 9) * Math.min(1, (1 - u) * 7) + 3 * Math.sin(s / 7) * (u > 0.1 && u < 0.86 ? 1 : 0);
+        alt = Math.max(0, alt);
+      }
+      const ground = !armed;
+      if (step % 2 === 0) {
+        W('IMU', [0, rnd() * 0.02, rnd() * 0.02, rnd() * 0.01, rnd() * 0.3, rnd() * 0.3, -9.8 + rnd() * 0.4]);
+        W('IMU', [1, rnd() * 0.02, rnd() * 0.02, rnd() * 0.01, rnd() * 0.3, rnd() * 0.3, -9.8 + rnd() * 0.4]);
+      }
+      if (step % 5 === 0) {
+        const ab = alt + rnd() * 0.25;
+        W('ATT', [rnd() * 4, rnd() * 4, rnd() * 4, rnd() * 4, 90 + s % 360, 90 + s % 360]);
+        W('BARO', [0, ab, 112 + ab, 101325 - ab * 12, 24, rnd(), T / 1000, 0, 21, 1]);
+        W('BARO', [1, ab + 0.3 + rnd() * 0.2, 112.3 + ab, 101321 - ab * 12, 26, rnd(), T / 1000, 0, 21, 1]);
+        W('POS', [home[0] + alt * 1e-6, home[1], 112 + alt, alt, alt]);
+        if (armed) W('CTUN', [0.3, 1, ground ? 0 : 0.32 + rnd() * 0.04, 0.31, alt, alt + rnd() * 0.3, 0, rnd() * 50]);
+        const curr = armed ? 18 + 6 * Math.min(1, alt / 10) + rnd() * 2 : 0.6;
+        curTot += curr * 0.1 / 3.6;
+        volt = Math.max(13.6, volt - (armed ? 0.00065 : 0.00001));
+        if (fi === 1 && !armed && s > 340 && s < 345) volt = 16.75; // battery swap
+        W('BAT', [0, volt - curr * 0.012 + rnd() * 0.02, volt, curr, curTot, curTot * 15 / 1000, 30, 0.012, Math.max(0, Math.round((volt - 13.6) / 3.1 * 100))]);
+        if (s > 425 && s < 660) { rfndOn = true; W('RFND', [0, Math.max(0.2, alt + rnd() * 0.1), 4, 25, 100]); }
+      }
+      if (step % 10 === 0) W('GPS', [0, 6, (T / 1000) % 604800000, 2350, 18, 0.62, home[0] + alt * 1e-6, home[1] + (armed ? 0.00002 * (s % 60) : 0), 112 + alt, armed ? 3 + rnd() : 0, 90, 0, 0]);
+      if (Math.abs(s - 201.3) < 0.01) { W('ERR', [16, 2]); W('MSG', ['EKF3 lane switch 1']); }
+      if (Math.abs(s - 202.0) < 0.01) W('ERR', [16, 0]);
+    }
+    void rfndOn;
+    return buf.slice(0, n);
+  }
+
+  return { scan, cutAt, cutRange, estimateBytes, buildHeader, exportPart, demoLog, readNum, makeFmt };
+})();
+/*CORE-END*/
+</script>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const MODE_NAMES = {
+  copter: { 0: 'STABILIZE', 1: 'ACRO', 2: 'ALT_HOLD', 3: 'AUTO', 4: 'GUIDED', 5: 'LOITER', 6: 'RTL', 7: 'CIRCLE', 9: 'LAND', 11: 'DRIFT', 13: 'SPORT', 14: 'FLIP', 15: 'AUTOTUNE', 16: 'POSHOLD', 17: 'BRAKE', 18: 'THROW', 19: 'AVOID_ADSB', 20: 'GUIDED_NOGPS', 21: 'SMART_RTL', 22: 'FLOWHOLD', 23: 'FOLLOW', 24: 'ZIGZAG', 25: 'SYSTEMID', 26: 'AUTOROTATE', 27: 'AUTO_RTL', 28: 'TURTLE' },
+  plane: { 0: 'MANUAL', 1: 'CIRCLE', 2: 'STABILIZE', 3: 'TRAINING', 4: 'ACRO', 5: 'FBWA', 6: 'FBWB', 7: 'CRUISE', 8: 'AUTOTUNE', 10: 'AUTO', 11: 'RTL', 12: 'LOITER', 13: 'TAKEOFF', 14: 'AVOID_ADSB', 15: 'GUIDED', 17: 'QSTABILIZE', 18: 'QHOVER', 19: 'QLOITER', 20: 'QLAND', 21: 'QRTL', 22: 'QAUTOTUNE', 23: 'QACRO', 24: 'THERMAL', 25: 'LOITER_ALT_QLAND', 26: 'AUTOLAND' },
+  rover: { 0: 'MANUAL', 1: 'ACRO', 3: 'STEERING', 4: 'HOLD', 5: 'LOITER', 6: 'FOLLOW', 7: 'SIMPLE', 8: 'DOCK', 9: 'CIRCLE', 10: 'AUTO', 11: 'RTL', 12: 'SMART_RTL', 15: 'GUIDED', 16: 'INITIALISING' },
+  sub: { 0: 'STABILIZE', 1: 'ACRO', 2: 'ALT_HOLD', 3: 'AUTO', 4: 'GUIDED', 7: 'CIRCLE', 9: 'SURFACE', 16: 'POSHOLD', 19: 'MANUAL', 20: 'MOTOR_DETECT', 21: 'SURFTRAK' }
+};
+const ALT_CANDIDATES = ['POS.RelHomeAlt', 'CTUN.Alt', 'BARO[0].Alt', 'BARO.Alt', 'GPS[0].Alt', 'GPS.Alt', 'AHR2.Alt'];
+const EXTRA_CANDIDATES = ['BAT[0].Volt', 'BAT.Volt', 'GPS[0].Spd', 'GPS.Spd'];
+const VIEWER_LIMIT = 1.5e9;
+
+const st = {
+  ix: null, demo: false, view: { t0: 0, t1: 1 }, sel: null, parts: [], activePart: -1,
+  plot: [], exclude: new Set(), expanded: new Set(), scanning: false, cancelScan: false, busy: false, hover: null, colors: {}
+};
+
+/* ---------- formatting ---------- */
+function fmtT(us, digits = 1) {
+  if (!isFinite(us)) return '–';
+  const neg = us < 0; let s = Math.abs(us) / 1e6;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  let ss = s.toFixed(digits); if (s < 10) ss = '0' + ss;
+  if (ss.startsWith('60')) { ss = (0).toFixed(digits).padStart(digits ? digits + 3 : 2, '0'); }
+  return (neg ? '-' : '') + (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + ss;
+}
+function fmtDur(us) {
+  const s = Math.round(us / 1e6);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h ? `${h} h ${String(m).padStart(2, '0')} min` : m ? `${m} min ${String(r).padStart(2, '0')} s` : `${r} s`;
+}
+function fmtTFile(us) {
+  const s = Math.floor(us / 1e6), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return (h ? h + 'h' : '') + String(m).padStart(h ? 2 : 1, '0') + 'm' + String(r).padStart(2, '0') + 's';
+}
+function fmtBytes(b) {
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + ' GB';
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB';
+  if (b >= 1e3) return (b / 1e3).toFixed(0) + ' kB';
+  return b + ' B';
+}
+function fmtNum(v) {
+  if (!isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a !== 0 && (a >= 1e6 || a < 1e-3)) return v.toExponential(2);
+  return a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+function parseT(str) {
+  const s = String(str).trim(); if (!s) return NaN;
+  const parts = s.split(':').map(Number);
+  if (parts.some(x => !isFinite(x))) return NaN;
+  let v = 0; for (const p of parts) v = v * 60 + p;
+  return v * 1e6;
+}
+function modeName(m) {
+  const tbl = MODE_NAMES[st.ix && st.ix.vehicle];
+  return (tbl && tbl[m] !== undefined) ? tbl[m] : 'Mode ' + m;
+}
+function setStatus(text, isErr) { const el = $('status'); el.textContent = text; el.classList.toggle('err', !!isErr); }
+function baseName() { return (st.ix ? st.ix.name : 'log').replace(/\.(bin|log)$/i, ''); }
+function slug(s) { return String(s).trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'part'; }
+
+/* ---------- theme colors for canvas ---------- */
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['surface', 'ink', 'muted', 'line', 'grid', 'accent', 'accent-ink', 'sel', 'selfill', 'armed', 'armed-line', 'rate', 'crit', 'ok', 's1', 's2', 's3', 's4', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'font-ui', 'font-mono'])
+    st.colors[k] = cs.getPropertyValue('--' + k).trim();
+}
+const SERIES_COLORS = ['s1', 's2', 's3', 's4'];
+
+/* ---------- open & scan ---------- */
+async function openFile(file, isDemo) {
+  if (st.scanning) return;
+  st.scanning = true; st.cancelScan = false;
+  const box = $('scanBox'); box.hidden = false;
+  $('scanTitle').textContent = isDemo ? 'Building demo log…' : 'Reading ' + file.name + '…';
+  $('scanBar').style.width = '0%'; $('scanText').textContent = '';
+  const t0 = performance.now();
+  try {
+    const ix = await DF.scan(file, {
+      sampleUs: Number($('detail').value) || 250000,
+      isCancelled: () => st.cancelScan,
+      onProgress: (fr, ix) => {
+        $('scanBar').style.width = (fr * 100).toFixed(1) + '%';
+        const el = (performance.now() - t0) / 1000;
+        const done = fr * file.size;
+        let msgs = 0; for (let k = 0; k < ix.keys.length; k++) msgs += ix.kc[k];
+        $('scanText').textContent = `${fmtBytes(done)} of ${fmtBytes(file.size)} · ${el > 0.2 ? fmtBytes(done / el) + '/s' : ''} · ${Math.round(msgs).toLocaleString()} messages`;
+      }
+    });
+    st.ix = ix; st.demo = !!isDemo; st.sel = null; st.parts = []; st.activePart = -1; st.exclude = new Set(); st.expanded = new Set();
+    st.view = { t0: ix.tMin, t1: Math.max(ix.tMax, ix.tMin + 1e6) };
+    pickDefaultSeries();
+    renderSummary(); renderTypes(); fillSeriesList();
+    const flights = autoArm(true);
+    resize();
+    renderParts();
+    updateSel();
+    const chip = $('fileChip');
+    chip.innerHTML = '';
+    chip.append(document.createTextNode(ix.name));
+    if (isDemo) { const b = document.createElement('b'); b.textContent = 'DEMO'; chip.append(b); }
+    chip.title = ix.name;
+    setStatus(isDemo
+      ? 'This is a generated demo log. Open your own .bin to split it.'
+      : `Scanned in ${ix.seconds.toFixed(1)} s. ` + (flights ? `Suggested ${flights} part${flights > 1 ? 's' : ''} from arm/disarm events.` : 'No arm/disarm events found; select a range or split by size.'));
+  } catch (e) {
+    if (e.message === 'cancelled') setStatus('Reading cancelled.');
+    else { console.error(e); setStatus('Could not read this file: ' + e.message, true); }
+  } finally {
+    st.scanning = false; box.hidden = true;
+  }
+}
+
+function pickDefaultSeries() {
+  const ix = st.ix; const ids = new Set(ix.series.map(s => s.id));
+  st.plot = [];
+  const alt = ALT_CANDIDATES.find(id => ids.has(id));
+  if (alt) addSeries(alt, true);
+  const extra = EXTRA_CANDIDATES.find(id => ids.has(id));
+  if (extra) addSeries(extra, true);
+  if (!st.plot.length && ix.series.length) addSeries(ix.series[0].id, true);
+}
+function addSeries(id, silent) {
+  const ix = st.ix; if (!ix) return false;
+  const s = ix.series.find(x => x.id === id) || ix.series.find(x => x.id.toLowerCase() === id.toLowerCase());
+  if (!s || st.plot.some(p => p.id === s.id)) return false;
+  if (st.plot.length >= 4) { setStatus('The chart shows up to four fields. Remove one first.'); return false; }
+  const used = new Set(st.plot.map(p => p.color));
+  st.plot.push({ id: s.id, s, color: SERIES_COLORS.find(c => !used.has(c)) });
+  if (!silent) { renderChips(); resize(); }
+  return true;
+}
+function renderChips() {
+  const box = $('seriesChips'); box.innerHTML = '';
+  for (const p of st.plot) {
+    const c = document.createElement('span'); c.className = 'serieschip';
+    c.innerHTML = `<i class="sw" style="background:var(--${p.color})"></i><span></span><button type="button" aria-label="Remove field">×</button>`;
+    c.querySelector('span').textContent = p.id + (p.s.unit ? ` (${p.s.unit})` : '');
+    c.querySelector('button').onclick = () => { st.plot = st.plot.filter(x => x !== p); renderChips(); resize(); };
+    box.append(c);
+  }
+}
+function fillSeriesList() {
+  const dl = $('seriesList'); dl.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  for (const s of st.ix.series) { const o = document.createElement('option'); o.value = s.id; frag.append(o); }
+  dl.append(frag);
+  renderChips();
+}
+
+function renderSummary() {
+  const ix = st.ix;
+  const items = [
+    ['Size', fmtBytes(ix.size)],
+    ['Duration', fmtDur(ix.tMax - ix.tMin)],
+    ['Boot time', fmtT(ix.tMin, 0) + ' – ' + fmtT(ix.tMax, 0)],
+    ['Messages', Math.round(ix.nMsgs).toLocaleString()],
+    ['Armed periods', String(ix.armed.length)],
+    ['Corrupt bytes skipped', ix.bad ? ix.bad.toLocaleString() : '0'],
+    ['Firmware', (ix.firmware || 'not found in MSG') + (ix.frame ? ' · ' + ix.frame : ''), 'wide']
+  ];
+  const dl = $('summary'); dl.innerHTML = '';
+  for (const [k, v, cls] of items) {
+    const d = document.createElement('div'); if (cls) d.className = cls;
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v;
+    d.append(dt, dd); dl.append(d);
+  }
+  if (ix.size > VIEWER_LIMIT) {
+    const dd = dl.children[0].querySelector('dd');
+    const b = document.createElement('span'); b.className = 'badge warn'; b.textContent = 'over 1.5 GB'; b.style.marginLeft = '8px';
+    dd.append(b);
+  }
+}
+
+function renderTypes() {
+  const ix = st.ix, body = $('typesBody'); body.innerHTML = '';
+  const max = ix.typeStats.length ? ix.typeStats[0].bytes : 1;
+  const frag = document.createDocumentFragment();
+  const share = b => { const v = b / ix.size * 100; return v < 0.1 ? '<0.1' : v.toFixed(1); };
+  const row = (cls, label, count, bytes, depth) => {
+    const tr = document.createElement('tr'); tr.className = cls;
+    tr.innerHTML = `<td><input type="checkbox"></td><td class="mono tname"></td><td class="num">${Math.round(count).toLocaleString()}</td><td class="num">${fmtBytes(bytes)}</td>
+      <td class="barcell"><div class="sharewrap"><div class="mini" style="width:${Math.max(0.5, bytes / max * 100)}%"></div><span class="num">${share(bytes)}%</span></div></td>`;
+    tr.children[1].style.paddingLeft = depth ? '30px' : '';
+    const nm = document.createElement('span'); nm.textContent = label; tr.children[1].append(nm);
+    return tr;
+  };
+  for (const ts of ix.typeStats) {
+    const kids = ts.keys.map(k => k.kid);
+    const nOff = kids.filter(k => st.exclude.has(k)).length;
+    const multi = ts.keys.length > 1;
+    const open = multi && st.expanded.has(ts.type);
+    const tr = row('trow' + (nOff === kids.length ? ' dropped' : ''), ts.name, ts.count, ts.bytes, 0);
+    const cb = tr.querySelector('input');
+    cb.checked = nOff === 0; cb.indeterminate = nOff > 0 && nOff < kids.length;
+    cb.setAttribute('aria-label', 'Keep ' + ts.name);
+    if (ts.core) { cb.disabled = true; cb.title = 'Needed to read the log'; }
+    cb.onchange = () => { for (const k of kids) { if (cb.checked) st.exclude.delete(k); else st.exclude.add(k); } exclusionsChanged(); };
+    if (multi) {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'exp'; btn.textContent = open ? '▾' : '▸';
+      btn.setAttribute('aria-expanded', String(open)); btn.setAttribute('aria-label', (open ? 'Hide' : 'Show') + ' instances of ' + ts.name);
+      btn.onclick = () => { if (st.expanded.has(ts.type)) st.expanded.delete(ts.type); else st.expanded.add(ts.type); renderTypes(); };
+      tr.children[1].prepend(btn);
+      const tag = document.createElement('span'); tag.className = 'ninst';
+      tag.textContent = nOff && nOff < kids.length ? `${kids.length - nOff} of ${kids.length}` : `×${kids.length}`;
+      tr.children[1].append(tag);
+    } else {
+      const pad = document.createElement('span'); pad.className = 'exp-pad'; tr.children[1].prepend(pad);
+    }
+    frag.append(tr);
+    if (open) for (const k of ts.keys) {
+      const cr = row('irow' + (st.exclude.has(k.kid) ? ' dropped' : ''), k.label, k.count, k.bytes, 1);
+      const icb = cr.querySelector('input');
+      icb.checked = !st.exclude.has(k.kid); icb.setAttribute('aria-label', 'Keep ' + k.label);
+      icb.onchange = () => { if (icb.checked) st.exclude.delete(k.kid); else st.exclude.add(k.kid); exclusionsChanged(); };
+      frag.append(cr);
+    }
+  }
+  body.append(frag);
+  renderExclNote();
+}
+function exclusionsChanged() {
+  const box = $('typesBox'), top = box.scrollTop;
+  renderTypes(); box.scrollTop = top;
+  renderParts(); updateSel();
+}
+function renderExclNote() {
+  const ix = st.ix, el = $('exclNote');
+  if (!ix || !st.exclude.size) { el.textContent = 'Every message type is kept.'; return; }
+  const names = [];
+  for (const ts of ix.typeStats) {
+    const off = ts.keys.filter(k => st.exclude.has(k.kid));
+    if (!off.length) continue;
+    if (off.length === ts.keys.length) names.push(ts.name);
+    else names.push(...off.map(k => k.label));
+  }
+  const saved = ix.size - DF.estimateBytes(ix, 0, ix.size, st.exclude);
+  el.textContent = `Leaving out ${names.join(', ')}: about ${fmtBytes(saved)} of the whole log.`;
+}
+
+/* ---------- parts ---------- */
+function partInfo(t0, t1) {
+  const ix = st.ix;
+  const c = DF.cutRange(ix, t0, t1);
+  const hdr = DF.buildHeader(ix, c.a, c.tA, exportOpts(), st.exclude);
+  const bytes = DF.estimateBytes(ix, c.a, c.b, st.exclude) + hdr.length;
+  return { ...c, bytes, hdr };
+}
+function autoArm(quiet) {
+  const ix = st.ix; if (!ix) return 0;
+  const pad = (parseFloat($('armPad').value) || 0) * 1e6;
+  const merged = [];
+  for (const a of ix.armed) {
+    const t0 = Math.max(ix.tMin, a.t0 - pad), t1 = Math.min(ix.tMax, a.t1 + pad);
+    if (merged.length && t0 <= merged[merged.length - 1].t1) merged[merged.length - 1].t1 = Math.max(merged[merged.length - 1].t1, t1);
+    else merged.push({ t0, t1 });
+  }
+  if (!merged.length) { if (!quiet) setStatus('This log has no ARM or arming EV messages, so there are no flights to split at.'); return 0; }
+  st.parts = merged.map((m, i) => { const c = DF.cutRange(ix, m.t0, m.t1); return { name: 'Flight ' + (i + 1), t0: c.tA, t1: c.tB }; });
+  st.activePart = -1;
+  if (!quiet) { setStatus(`${st.parts.length} flight${st.parts.length > 1 ? 's' : ''} found.`); renderParts(); drawAll(); }
+  return st.parts.length;
+}
+function autoSize() {
+  const ix = st.ix; if (!ix) return;
+  const maxBytes = (parseFloat($('maxMB').value) || 0) * 1e6;
+  if (maxBytes < 2e6) { setStatus('Enter a maximum part size of at least 2 MB.', true); return; }
+  const parts = []; const O = ix.cpOff, T = ix.cpT, n = ix.cpN;
+  let a = 0, tA = ix.tMin;
+  const opts = exportOpts();
+  while (a < ix.size && parts.length < 1000) {
+    const hdrLen = DF.buildHeader(ix, a, tA, opts, st.exclude).length;
+    // with unticked types the size is an estimate (counts are interpolated within 16 MB blocks), so keep 1% spare
+    const budget = (st.exclude.size ? maxBytes * 0.99 : maxBytes) - hdrLen;
+    if (DF.estimateBytes(ix, a, ix.size, st.exclude) <= budget) { parts.push({ t0: tA, t1: ix.tMax }); break; }
+    // largest checkpoint b with est(a,b) <= budget
+    let lo = 0, hi = n - 1, best = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (O[m] <= a) { lo = m + 1; continue; } if (DF.estimateBytes(ix, a, O[m], st.exclude) <= budget) { best = m; lo = m + 1; } else hi = m - 1; }
+    if (best < 0) { setStatus('The maximum size is smaller than one cut step of this log. Use a larger size.', true); return; }
+    parts.push({ t0: tA, t1: T[best] });
+    a = O[best]; tA = T[best];
+  }
+  st.parts = parts.map((p, i) => ({ name: 'Part ' + (i + 1), t0: p.t0, t1: p.t1 }));
+  st.activePart = -1;
+  setStatus(`${st.parts.length} part${st.parts.length > 1 ? 's' : ''}, each at most ${fmtBytes(maxBytes)}${st.exclude.size ? ' after dropping the unticked message types' : ''}.`);
+  renderParts(); drawAll();
+}
+function renderParts() {
+  const body = $('partsBody'); body.innerHTML = '';
+  const ix = st.ix;
+  if (!ix || !st.parts.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No parts yet. Select a range on the chart and add it, or split automatically.</td></tr>';
+    $('partsNote').textContent = ''; $('saveAll').disabled = true; return;
+  }
+  let total = 0;
+  st.parts.forEach((p, i) => {
+    const info = partInfo(p.t0, p.t1); total += info.bytes;
+    const tr = document.createElement('tr'); tr.className = 'part' + (i === st.activePart ? ' active' : '');
+    const over = info.bytes > VIEWER_LIMIT;
+    tr.innerHTML = `<td><span class="idx">${i + 1}</span></td>
+      <td><input class="name" aria-label="Part name"></td>
+      <td class="num mono">${fmtT(info.tA)}</td><td class="num mono">${fmtT(info.tB)}</td>
+      <td class="num mono">${fmtDur(info.tB - info.tA)}</td>
+      <td class="num mono">${fmtBytes(info.bytes)}${over ? ' <span class="badge warn" title="UAVLogViewer fails above about 1.5 GB">big</span>' : ''}</td>
+      <td><div class="rowact"><div class="prog" hidden><i></i></div><button class="btn small save" type="button">Save…</button><button class="btn small ghost del" type="button" aria-label="Remove part">✕</button></div></td>`;
+    const inp = tr.querySelector('input.name'); inp.value = p.name;
+    inp.onchange = () => { p.name = inp.value || p.name; };
+    inp.onclick = e => e.stopPropagation();
+    tr.querySelector('.save').onclick = e => { e.stopPropagation(); savePart(p, tr); };
+    tr.querySelector('.del').onclick = e => { e.stopPropagation(); st.parts.splice(i, 1); if (st.activePart === i) st.activePart = -1; renderParts(); drawAll(); };
+    tr.onclick = () => selectPart(i, true);
+    body.append(tr);
+  });
+  $('partsNote').textContent = `${st.parts.length} part${st.parts.length > 1 ? 's' : ''} · ${fmtBytes(total)} in total`;
+  $('saveAll').disabled = st.busy;
+}
+function selectPart(i, zoom) {
+  const p = st.parts[i]; if (!p) return;
+  st.activePart = i; st.sel = { t0: p.t0, t1: p.t1 };
+  if (zoom) { const pad = (p.t1 - p.t0) * 0.08 + 2e6; setView(p.t0 - pad, p.t1 + pad); }
+  for (const [k, tr] of [...$('partsBody').children].entries()) tr.classList.toggle('active', k === i);
+  updateSel(); drawAll();
+}
+function exportOpts() {
+  return { params: $('optParams').checked, msgs: $('optMsgs').checked, mission: $('optMission').checked, state: $('optState').checked, origin: $('optOrigin').checked, retime: $('optRetime').checked };
+}
+
+/* ---------- selection row ---------- */
+function updateSel() {
+  const has = !!(st.ix && st.sel && st.sel.t1 > st.sel.t0);
+  $('addSeg').disabled = !has || st.busy; $('saveSel').disabled = !has || st.busy;
+  $('zoomSel').disabled = !has;
+  $('selAll').disabled = !st.ix || st.busy;
+  if (!has) {
+    $('selStart').value = ''; $('selEnd').value = '';
+    $('selDur').textContent = 'No selection'; $('selSize').textContent = ''; $('selBadge').innerHTML = ''; return;
+  }
+  const info = partInfo(st.sel.t0, st.sel.t1);
+  if (document.activeElement !== $('selStart')) $('selStart').value = fmtT(info.tA, 2);
+  if (document.activeElement !== $('selEnd')) $('selEnd').value = fmtT(info.tB, 2);
+  $('selDur').textContent = fmtDur(info.tB - info.tA);
+  $('selSize').textContent = '≈ ' + fmtBytes(info.bytes);
+  $('selBadge').innerHTML = info.bytes > VIEWER_LIMIT ? '<span class="badge warn">over UAVLogViewer\'s ~1.5 GB limit</span>' : '<span class="badge ok">under 1.5 GB</span>';
+}
+function commitSelInputs() {
+  if (!st.ix) return;
+  const a = parseT($('selStart').value), b = parseT($('selEnd').value);
+  if (!isFinite(a) || !isFinite(b) || b <= a) { setStatus('Enter times as m:ss.s (or h:mm:ss) with the end after the start.', true); updateSel(); return; }
+  const c = DF.cutRange(st.ix, a, b);
+  st.sel = { t0: c.tA, t1: c.tB }; st.activePart = -1;
+  updateSel(); drawAll();
+}
+
+/* ---------- saving ---------- */
+function makeBlobSink(name) {
+  const parts = [];
+  return {
+    write: async x => { parts.push(x); },
+    close: async () => {
+      const blob = new Blob(parts, { type: 'application/octet-stream' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name; a.rel = 'noopener';
+      document.body.append(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10 * 60 * 1000);
+    }
+  };
+}
+async function makeFileSink(handle) {
+  const w = await handle.createWritable();
+  return { write: x => w.write(x), close: () => w.close(), abort: () => w.abort() };
+}
+function partFileName(p, i) {
+  return `${baseName()}_${slug(p.name || 'part' + (i + 1))}_${fmtTFile(p.t0)}-${fmtTFile(p.t1)}.bin`;
+}
+async function writePart(p, sink, progEl) {
+  const ix = st.ix, c = DF.cutRange(ix, p.t0, p.t1);
+  const hdr = DF.buildHeader(ix, c.a, c.tA, exportOpts(), st.exclude);
+  await DF.exportPart(ix, c.a, c.b, hdr, st.exclude, sink, fr => { if (progEl) progEl.style.width = (fr * 100).toFixed(1) + '%'; });
+  await sink.close();
+  return DF.estimateBytes(ix, c.a, c.b, st.exclude) + hdr.length;
+}
+async function savePart(p, tr) {
+  if (st.busy || !st.ix) return;
+  const name = partFileName(p, st.parts.indexOf(p));
+  let sink;
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'DataFlash log', accept: { 'application/octet-stream': ['.bin'] } }] });
+      sink = await makeFileSink(h);
+    } catch (e) { if (e && e.name === 'AbortError') return; sink = null; }
+  }
+  if (!sink) sink = makeBlobSink(name);
+  setBusy(true);
+  const prog = tr ? tr.querySelector('.prog') : null; if (prog) prog.hidden = false;
+  setStatus('Writing ' + name + '…');
+  try {
+    const bytes = await writePart(p, sink, prog ? prog.firstElementChild : null);
+    setStatus(`Saved ${name} (${fmtBytes(bytes)}).`);
+  } catch (e) {
+    console.error(e); if (sink.abort) try { await sink.abort(); } catch (_) {}
+    setStatus('Saving failed: ' + e.message, true);
+  } finally { setBusy(false); if (prog) prog.hidden = true; }
+}
+async function saveAll() {
+  if (st.busy || !st.ix || !st.parts.length) return;
+  let dir = null;
+  if (window.showDirectoryPicker) {
+    try { dir = await window.showDirectoryPicker({ mode: 'readwrite' }); }
+    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
+  }
+  setBusy(true);
+  const rows = [...$('partsBody').children];
+  try {
+    for (let i = 0; i < st.parts.length; i++) {
+      const p = st.parts[i], name = partFileName(p, i);
+      const prog = rows[i] && rows[i].querySelector('.prog'); if (prog) prog.hidden = false;
+      setStatus(`Writing part ${i + 1} of ${st.parts.length}: ${name}…`);
+      const sink = dir ? await makeFileSink(await dir.getFileHandle(name, { create: true })) : makeBlobSink(name);
+      await writePart(p, sink, prog ? prog.firstElementChild : null);
+      if (prog) prog.hidden = true;
+      if (!dir) await new Promise(r => setTimeout(r, 400));
+    }
+    setStatus(dir ? `Saved ${st.parts.length} parts to the chosen folder.` : `Started ${st.parts.length} downloads. If only one appears, allow multiple downloads for this page.`);
+  } catch (e) { console.error(e); setStatus('Saving failed: ' + e.message, true); }
+  finally { setBusy(false); rows.forEach(r => { const p = r.querySelector('.prog'); if (p) p.hidden = true; }); }
+}
+function setBusy(b) {
+  st.busy = b;
+  for (const el of document.querySelectorAll('#partsBody .save')) el.disabled = b;
+  $('saveAll').disabled = b || !st.parts.length; updateSel();
+}
+
+/* ---------- chart geometry ---------- */
+const G = { L: 66, R: 12, segY: 4, segH: 16, modeY: 24, modeH: 18, evY: 46, evH: 12, laneY0: 66, laneH: 92, laneGap: 10, rateH: 30, axisH: 20, W: 600, H: 400 };
+const mainCv = $('main'), ovCv = $('overview');
+const mainCtx = mainCv.getContext('2d'), ovCtx = ovCv.getContext('2d');
+const baseCv = document.createElement('canvas'), baseCtx = baseCv.getContext('2d');
+let dpr = 1;
+function layout() {
+  const nL = Math.max(1, st.plot.length);
+  G.lanesEnd = G.laneY0 + nL * G.laneH + (nL - 1) * G.laneGap;
+  G.rateY = G.lanesEnd + 12;
+  G.axisY = G.rateY + G.rateH + 4;
+  G.H = G.axisY + G.axisH;
+}
+function resize() {
+  layout();
+  dpr = window.devicePixelRatio || 1;
+  const w = Math.max(280, $('chartBox').clientWidth);
+  G.W = w;
+  G.L = w < 480 ? 50 : 66;
+  for (const [cv, h] of [[mainCv, G.H], [baseCv, G.H]]) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  mainCv.style.height = G.H + 'px';
+  ovCv.width = Math.round(w * dpr); ovCv.height = Math.round(44 * dpr);
+  drawAll();
+}
+const xOf = t => G.L + (t - st.view.t0) / (st.view.t1 - st.view.t0) * (G.W - G.L - G.R);
+const tOf = x => st.view.t0 + (x - G.L) / (G.W - G.L - G.R) * (st.view.t1 - st.view.t0);
+function setView(t0, t1) {
+  const ix = st.ix; if (!ix) return;
+  const full = Math.max(ix.tMax - ix.tMin, 1e6), minSpan = 2e6;
+  let span = Math.min(full, Math.max(minSpan, t1 - t0));
+  let a = t0 + ((t1 - t0) - span) / 2;
+  a = Math.max(ix.tMin, Math.min(ix.tMax - span, a));
+  if (full <= span) a = ix.tMin;
+  st.view = { t0: a, t1: a + span };
+}
+function lowerBound(T, n, t) { let lo = 0, hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (T[m] < t) lo = m + 1; else hi = m; } return lo; }
+function niceStep(range, target) {
+  const raw = range / Math.max(1, target), p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p;
+  return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p;
+}
+const TIME_STEPS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].map(s => s * 1e6);
+
+/* ---------- drawing ---------- */
+function drawAll() { if (!st.ix) { clearCharts(); return; } drawBase(); present(); drawOverview(); }
+function clearCharts() {
+  readColors();
+  for (const [ctx, cv] of [[mainCtx, mainCv], [ovCtx, ovCv]]) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = st.colors.surface; ctx.fillRect(0, 0, cv.width, cv.height); }
+}
+function text(ctx, s, x, y, color, align = 'left', base = 'middle', font) {
+  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = base; ctx.font = font || `11px ${st.colors['font-ui']}`; ctx.fillText(s, x, y);
+}
+function drawBase() {
+  const ix = st.ix, c = st.colors, ctx = baseCtx;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = c.surface; ctx.fillRect(0, 0, G.W, G.H);
+  const x0 = G.L, x1 = G.W - G.R, plotW = x1 - x0;
+  const { t0, t1 } = st.view;
+  const mono = `11px ${c['font-mono']}`;
+  // row titles
+  text(ctx, 'Parts', 6, G.segY + G.segH / 2, c.muted);
+  text(ctx, 'Mode', 6, G.modeY + G.modeH / 2, c.muted);
+  text(ctx, 'Events', 6, G.evY + G.evH / 2, c.muted);
+  text(ctx, 'Rate', 6, G.rateY + G.rateH / 2, c.muted);
+  ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, plotW, G.H); ctx.clip();
+  // armed shading
+  ctx.fillStyle = c.armed;
+  for (const a of ix.armed) {
+    if (a.t1 < t0 || a.t0 > t1) continue;
+    const xa = Math.max(x0, xOf(a.t0)), xb = Math.min(x1, xOf(a.t1));
+    ctx.fillRect(xa, G.laneY0 - 4, xb - xa, G.rateY + G.rateH - G.laneY0 + 4);
+  }
+  // time grid
+  const target = Math.max(2, plotW / 110);
+  const step = TIME_STEPS.find(s => (t1 - t0) / s <= target) || 7200e6;
+  ctx.strokeStyle = c.grid; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) { const x = Math.round(xOf(t)) + 0.5; ctx.moveTo(x, G.laneY0 - 4); ctx.lineTo(x, G.rateY + G.rateH); }
+  ctx.stroke();
+  ctx.restore();
+  for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+    const x = xOf(t); if (x < x0 + 14 || x > x1 - 14) continue;
+    text(ctx, fmtT(t, step < 1e6 ? 1 : 0), x, G.axisY + G.axisH / 2, c.muted, 'center', 'middle', mono);
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, plotW, G.H); ctx.clip();
+  // parts
+  const order = st.parts.map((p, i) => i).filter(i => i !== st.activePart);
+  if (st.activePart >= 0 && st.parts[st.activePart]) order.push(st.activePart);
+  for (const i of order) {
+    const p = st.parts[i];
+    if (p.t1 < t0 || p.t0 > t1) continue;
+    const xa = xOf(p.t0), xb = xOf(p.t1), w = Math.max(2, xb - xa);
+    const active = i === st.activePart;
+    ctx.fillStyle = c.accent; ctx.globalAlpha = active ? 1 : 0.22; ctx.fillRect(xa, G.segY, w, G.segH); ctx.globalAlpha = 1;
+    ctx.strokeStyle = c.accent; ctx.lineWidth = 1; ctx.strokeRect(Math.round(xa) + 0.5, G.segY + 0.5, Math.max(1, Math.round(w) - 1), G.segH - 1);
+    const va = Math.max(xa, x0), vb = Math.min(xb, x1), vw = vb - va;
+    const label = String(i + 1) + (vw > 120 ? '  ' + p.name : '');
+    if (vw > 16) text(ctx, label, va + vw / 2, G.segY + G.segH / 2 + 0.5, active ? c['accent-ink'] : c.ink, 'center', 'middle', `600 11px ${c['font-ui']}`);
+  }
+  // modes
+  const modeColor = new Map(); let mc = 0;
+  for (const sp of ix.modeSpans) if (!modeColor.has(sp.mode)) modeColor.set(sp.mode, mc < 8 ? c['m' + (++mc)] : c.muted);
+  for (const sp of ix.modeSpans) {
+    if (sp.t1 < t0 || sp.t0 > t1) continue;
+    const xa = Math.max(x0 - 1, xOf(sp.t0)), xb = Math.min(x1 + 1, xOf(sp.t1)), w = xb - xa;
+    if (w <= 0) continue;
+    ctx.fillStyle = modeColor.get(sp.mode); ctx.globalAlpha = 0.3; ctx.fillRect(xa, G.modeY, w, G.modeH); ctx.globalAlpha = 1;
+    ctx.fillRect(xa, G.modeY + G.modeH - 2, w, 2);
+    const nm = modeName(sp.mode);
+    ctx.font = `600 10.5px ${c['font-ui']}`;
+    if (ctx.measureText(nm).width + 8 < w) text(ctx, nm, xa + 4, G.modeY + G.modeH / 2, c.ink, 'left', 'middle', `600 10.5px ${c['font-ui']}`);
+    ctx.strokeStyle = c.surface; ctx.beginPath(); ctx.moveTo(Math.round(xa) + 0.5, G.modeY); ctx.lineTo(Math.round(xa) + 0.5, G.modeY + G.modeH); ctx.stroke();
+  }
+  // events
+  ctx.fillStyle = c.muted;
+  for (const m of ix.msgs) { if (m.t < t0 || m.t > t1) continue; ctx.fillRect(Math.round(xOf(m.t)), G.evY + 2, 1, G.evH - 4); }
+  ctx.fillStyle = c.crit;
+  for (const e of ix.errs) { if (e.t < t0 || e.t > t1) continue; ctx.fillRect(Math.round(xOf(e.t)) - 0.5, G.evY, 2, G.evH); }
+  for (const a of ix.armed) {
+    for (const [t, up] of [[a.t0, true], [a.t1, false]]) {
+      if (t < t0 || t > t1) continue;
+      const x = xOf(t); ctx.fillStyle = c['armed-line']; ctx.beginPath();
+      if (up) { ctx.moveTo(x - 4, G.evY + G.evH); ctx.lineTo(x + 4, G.evY + G.evH); ctx.lineTo(x, G.evY + 2); }
+      else { ctx.moveTo(x - 4, G.evY + 2); ctx.lineTo(x + 4, G.evY + 2); ctx.lineTo(x, G.evY + G.evH); }
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+  // lanes
+  st.plot.forEach((p, li) => drawLane(ctx, p, G.laneY0 + li * (G.laneH + G.laneGap), G.laneH, x0, x1));
+  if (!st.plot.length) text(ctx, 'Add a field above to plot it', (x0 + x1) / 2, G.laneY0 + G.laneH / 2, c.muted, 'center');
+  // data rate
+  drawRate(ctx, x0, x1);
+  // frame lines
+  ctx.strokeStyle = c.line; ctx.lineWidth = 1; ctx.beginPath();
+  ctx.moveTo(x0, G.axisY + 0.5); ctx.lineTo(x1, G.axisY + 0.5);
+  ctx.stroke();
+}
+function laneScale(p, t0, t1) {
+  const s = p.s.stream, T = s.t, V = s.v[p.s.k], n = s.n;
+  const i0 = Math.max(0, lowerBound(T, n, t0) - 1), i1 = Math.min(n - 1, lowerBound(T, n, t1));
+  let lo = Infinity, hi = -Infinity;
+  for (let i = i0; i <= i1; i++) { const v = V[i]; if (v === v && v !== Infinity && v !== -Infinity) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+  return { i0, i1, lo, hi };
+}
+function drawLane(ctx, p, y, h, x0, x1) {
+  const c = st.colors, s = p.s.stream, T = s.t, V = s.v[p.s.k];
+  const { t0, t1 } = st.view;
+  let { i0, i1, lo, hi } = laneScale(p, t0, t1);
+  ctx.strokeStyle = c.line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0, y + h + 0.5); ctx.lineTo(x1, y + h + 0.5); ctx.stroke();
+  const label = p.id + (p.s.unit ? ' (' + p.s.unit + ')' : '');
+  if (!(hi >= lo)) { text(ctx, label + ': no samples in view', x0 + 8, y + h / 2, c.muted); return; }
+  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+  const step = niceStep(hi - lo, 3);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const yOf = v => y + h - (v - lo) / (hi - lo) * h;
+  // y grid + ticks
+  ctx.strokeStyle = c.grid; ctx.beginPath();
+  for (let v = lo; v <= hi + step * 0.01; v += step) { const yy = Math.round(yOf(v)) + 0.5; ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); }
+  ctx.stroke();
+  for (let v = lo; v <= hi + step * 0.01; v += step) {
+    const yy = yOf(v); if (yy < y + 6 || yy > y + h - 2) continue;
+    const dec = Math.max(0, Math.min(6, -Math.floor(Math.log10(step) + 1e-9)));
+    const lab = Math.abs(v) >= 1e6 ? v.toExponential(1) : (Math.abs(v) < step * 1e-6 ? 0 : v).toFixed(dec);
+    text(ctx, lab, x0 - 6, yy, c.muted, 'right', 'middle', `10.5px ${c['font-mono']}`);
+  }
+  // series: min/max per pixel column, break on gaps
+  ctx.save(); ctx.beginPath(); ctx.rect(x0, y - 1, x1 - x0, h + 2); ctx.clip();
+  ctx.strokeStyle = c[p.color]; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.beginPath();
+  const gap = Math.max(5 * st.ix.sampleUs, 3e6);
+  let col = null, mn = 0, mx = 0, last = 0, first = true, prevT = -Infinity;
+  const flush = () => { if (col === null) return; const yMin = yOf(mn), yMax = yOf(mx); ctx.lineTo(col, yMax); ctx.lineTo(col, yMin); ctx.lineTo(col, yOf(last)); };
+  for (let i = i0; i <= i1; i++) {
+    const v = V[i]; if (v !== v) continue;
+    const x = Math.round(xOf(T[i]));
+    if (T[i] - prevT > gap) { flush(); col = null; ctx.moveTo(x, yOf(v)); first = false; }
+    if (x !== col) { flush(); col = x; mn = mx = v; ctx.lineTo(x, yOf(v)); }
+    else { if (v < mn) mn = v; if (v > mx) mx = v; }
+    last = v; prevT = T[i];
+  }
+  flush();
+  ctx.stroke(); ctx.restore();
+  void first;
+  // lane label
+  ctx.font = `600 11px ${c['font-mono']}`;
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = c.surface; ctx.globalAlpha = 0.85; ctx.fillRect(x0 + 4, y + 2, tw + 26, 16); ctx.globalAlpha = 1;
+  ctx.fillStyle = c[p.color]; ctx.fillRect(x0 + 8, y + 9, 12, 3);
+  text(ctx, label, x0 + 24, y + 10.5, c.ink, 'left', 'middle', `600 11px ${c['font-mono']}`);
+}
+function drawRate(ctx, x0, x1) {
+  const ix = st.ix, c = st.colors, O = ix.cpOff, T = ix.cpT, n = ix.cpN;
+  const { t0, t1 } = st.view;
+  const w = Math.ceil(x1 - x0);
+  const bytes = new Float64Array(w), dur = new Float64Array(w);
+  let i = Math.max(1, lowerBound(T, n, t0));
+  for (; i < n; i++) {
+    const ta = T[i - 1], tb = T[i]; if (ta > t1) break;
+    const dt = tb - ta; if (dt <= 0) continue;
+    const px = Math.floor(xOf((ta + tb) / 2) - x0); if (px < 0 || px >= w) continue;
+    bytes[px] += O[i] - O[i - 1]; dur[px] += dt;
+  }
+  let max = 0; const rate = new Float64Array(w);
+  for (let k = 0; k < w; k++) if (dur[k] > 0) { rate[k] = bytes[k] / dur[k]; if (rate[k] > max) max = rate[k]; }
+  // carry values across empty columns when zoomed in further than the cut-point spacing
+  let lastV = -1;
+  for (let k = 0; k < w; k++) { if (dur[k] > 0) lastV = rate[k]; else if (lastV >= 0) rate[k] = lastV; }
+  ctx.fillStyle = c.rate; ctx.globalAlpha = 0.55;
+  const y = G.rateY, h = G.rateH;
+  if (max > 0) for (let k = 0; k < w; k++) { const v = rate[k] / max * (h - 2); if (v > 0) ctx.fillRect(x0 + k, y + h - v, 1, v); }
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = c.line; ctx.beginPath(); ctx.moveTo(x0, y + h + 0.5); ctx.lineTo(x1, y + h + 0.5); ctx.stroke();
+  if (max > 0) text(ctx, 'peak ' + fmtBytes(max * 1e6) + '/s', x1 - 4, y + 6, c.muted, 'right', 'middle', `10.5px ${c['font-mono']}`);
+}
+function present() {
+  const ctx = mainCtx, c = st.colors;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(baseCv, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const x0 = G.L, x1 = G.W - G.R;
+  if (st.sel && st.sel.t1 > st.sel.t0) {
+    const xa = xOf(st.sel.t0), xb = xOf(st.sel.t1);
+    const ca = Math.max(x0, xa), cb = Math.min(x1, xb);
+    if (cb > ca) { ctx.fillStyle = c.selfill; ctx.fillRect(ca, G.segY, cb - ca, G.rateY + G.rateH - G.segY); }
+    ctx.fillStyle = c.sel;
+    for (const x of [xa, xb]) {
+      if (x < x0 - 1 || x > x1 + 1) continue;
+      ctx.fillRect(Math.round(x) - 1, G.segY, 2, G.rateY + G.rateH - G.segY);
+      const gy = G.laneY0 + Math.min(G.lanesEnd - G.laneY0, G.laneH) / 2 - 12;
+      ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - 4, gy, 8, 24, 3) : ctx.rect(x - 4, gy, 8, 24); ctx.fill();
+    }
+  }
+  if (st.hover && !drag) {
+    const x = st.hover.x;
+    ctx.strokeStyle = c.muted; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, G.segY); ctx.lineTo(Math.round(x) + 0.5, G.rateY + G.rateH); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+function drawOverview() {
+  const ix = st.ix, c = st.colors, ctx = ovCtx, W = G.W, H = 44;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = c.surface; ctx.fillRect(0, 0, W, H);
+  const x0 = G.L, x1 = W - G.R, span = Math.max(1, ix.tMax - ix.tMin);
+  const X = t => x0 + (t - ix.tMin) / span * (x1 - x0);
+  ctx.fillStyle = c.grid; ctx.fillRect(x0, 2, x1 - x0, H - 4);
+  ctx.fillStyle = c.armed;
+  for (const a of ix.armed) ctx.fillRect(X(a.t0), 2, X(a.t1) - X(a.t0), H - 4);
+  const p = st.plot[0];
+  if (p) {
+    const s = p.s.stream, T = s.t, V = s.v[p.s.k];
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < s.n; i++) { const v = V[i]; if (v === v) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+    if (hi > lo) {
+      const w = Math.ceil(x1 - x0), mn = new Float64Array(w).fill(Infinity), mx = new Float64Array(w).fill(-Infinity);
+      for (let i = 0; i < s.n; i++) { const v = V[i]; if (v !== v) continue; const k = Math.min(w - 1, Math.max(0, Math.floor(X(T[i]) - x0))); if (v < mn[k]) mn[k] = v; if (v > mx[k]) mx[k] = v; }
+      ctx.fillStyle = c[p.color]; ctx.globalAlpha = 0.8;
+      for (let k = 0; k < w; k++) if (mx[k] >= mn[k]) { const ya = 4 + (1 - (mx[k] - lo) / (hi - lo)) * (H - 10), yb = 4 + (1 - (mn[k] - lo) / (hi - lo)) * (H - 10); ctx.fillRect(x0 + k, ya, 1, Math.max(1.2, yb - ya)); }
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.fillStyle = c.accent;
+  for (const pt of st.parts) ctx.fillRect(X(pt.t0), H - 5, Math.max(2, X(pt.t1) - X(pt.t0) - 1), 3);
+  if (st.sel) { ctx.fillStyle = c.sel; ctx.fillRect(X(st.sel.t0), 2, Math.max(2, X(st.sel.t1) - X(st.sel.t0)), 3); }
+  const va = X(st.view.t0), vb = X(st.view.t1);
+  ctx.fillStyle = c.surface; ctx.globalAlpha = 0.6;
+  ctx.fillRect(x0, 2, va - x0, H - 4); ctx.fillRect(vb, 2, x1 - vb, H - 4); ctx.globalAlpha = 1;
+  ctx.strokeStyle = c.ink; ctx.lineWidth = 1.5; ctx.strokeRect(va + 0.75, 1.75, Math.max(3, vb - va - 1.5), H - 3.5);
+  text(ctx, 'Whole log', 6, H / 2, c.muted);
+  st.ovX = X;
+}
+
+/* ---------- interaction ---------- */
+let drag = null;
+function canvasXY(e, cv) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function snapSel() {
+  if (!st.sel) return;
+  const a = Math.min(st.sel.t0, st.sel.t1), b = Math.max(st.sel.t0, st.sel.t1);
+  const c = DF.cutRange(st.ix, a, b);
+  st.sel = c.tB > c.tA ? { t0: c.tA, t1: c.tB } : null;
+}
+mainCv.addEventListener('pointerdown', e => {
+  if (!st.ix || e.button !== 0) return;
+  const { x, y } = canvasXY(e, mainCv);
+  if (x < G.L) return;
+  if (y >= G.segY && y <= G.segY + G.segH) {
+    const t = tOf(x); const i = st.parts.findIndex(p => t >= p.t0 && t <= p.t1);
+    if (i >= 0) { selectPart(i, false); return; }
+  }
+  mainCv.setPointerCapture(e.pointerId);
+  const t = tOf(x);
+  if (st.sel) {
+    const xa = xOf(st.sel.t0), xb = xOf(st.sel.t1);
+    if (Math.abs(x - xa) <= 7) { drag = { kind: 'edge', fixed: st.sel.t1, x0: x, moved: false }; return; }
+    if (Math.abs(x - xb) <= 7) { drag = { kind: 'edge', fixed: st.sel.t0, x0: x, moved: false }; return; }
+  }
+  drag = { kind: 'new', fixed: t, x0: x, moved: false };
+});
+mainCv.addEventListener('pointermove', e => {
+  if (!st.ix) return;
+  const { x, y } = canvasXY(e, mainCv);
+  if (drag) {
+    if (Math.abs(x - drag.x0) > 3) drag.moved = true;
+    if (drag.moved) {
+      const t = Math.max(st.ix.tMin, Math.min(st.ix.tMax, tOf(Math.max(G.L, Math.min(G.W - G.R, x)))));
+      st.sel = { t0: Math.min(drag.fixed, t), t1: Math.max(drag.fixed, t) }; st.activePart = -1;
+      updateSelLive(); present(); drawOverview();
+    }
+    return;
+  }
+  if (x < G.L || x > G.W - G.R) { hideTip(); return; }
+  let near = false;
+  if (st.sel) { const xa = xOf(st.sel.t0), xb = xOf(st.sel.t1); near = Math.abs(x - xa) <= 7 || Math.abs(x - xb) <= 7; }
+  mainCv.style.cursor = near ? 'ew-resize' : (y >= G.segY && y <= G.segY + G.segH ? 'pointer' : 'crosshair');
+  st.hover = { x, y }; present(); showTip(x, y);
+});
+function endDrag(e) {
+  if (!drag) return;
+  const d = drag; drag = null;
+  if (!d.moved) { if (d.kind === 'new') { st.sel = null; st.activePart = -1; } }
+  else snapSel();
+  for (const [k, tr] of [...$('partsBody').children].entries()) tr.classList.toggle('active', k === st.activePart);
+  updateSel(); present(); drawOverview();
+  void e;
+}
+mainCv.addEventListener('pointerup', endDrag);
+mainCv.addEventListener('pointercancel', endDrag);
+mainCv.addEventListener('pointerleave', () => { if (!drag) { st.hover = null; hideTip(); present(); } });
+mainCv.addEventListener('dblclick', () => { if (!st.ix) return; setView(st.ix.tMin, st.ix.tMax); drawAll(); });
+mainCv.addEventListener('wheel', e => {
+  if (!st.ix) return;
+  e.preventDefault();
+  const { x } = canvasXY(e, mainCv);
+  if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    const span = st.view.t1 - st.view.t0, d = e.deltaX / (G.W - G.L - G.R) * span;
+    setView(st.view.t0 + d, st.view.t1 + d);
+  } else {
+    const t = tOf(Math.max(G.L, Math.min(G.W - G.R, x)));
+    const k = Math.pow(1.0018, e.deltaY * (e.deltaMode === 1 ? 30 : 1));
+    setView(t - (t - st.view.t0) * k, t + (st.view.t1 - t) * k);
+  }
+  hideTip(); drawAll();
+}, { passive: false });
+function updateSelLive() {
+  if (!st.sel) return;
+  $('selStart').value = fmtT(st.sel.t0, 2); $('selEnd').value = fmtT(st.sel.t1, 2);
+  $('selDur').textContent = fmtDur(st.sel.t1 - st.sel.t0);
+}
+let ovDrag = null;
+ovCv.addEventListener('pointerdown', e => {
+  if (!st.ix || !st.ovX) return;
+  ovCv.setPointerCapture(e.pointerId);
+  const { x } = canvasXY(e, ovCv);
+  const span = st.ix.tMax - st.ix.tMin, toT = xx => st.ix.tMin + (xx - G.L) / (G.W - G.L - G.R) * span;
+  const va = st.ovX(st.view.t0), vb = st.ovX(st.view.t1);
+  const w = st.view.t1 - st.view.t0;
+  if (x < va || x > vb) { const t = toT(x); setView(t - w / 2, t + w / 2); drawAll(); }
+  ovDrag = { x, t0: st.view.t0, toT };
+  ovCv.style.cursor = 'grabbing';
+});
+ovCv.addEventListener('pointermove', e => {
+  if (!ovDrag) return;
+  const { x } = canvasXY(e, ovCv);
+  const d = ovDrag.toT(x) - ovDrag.toT(ovDrag.x), w = st.view.t1 - st.view.t0;
+  setView(ovDrag.t0 + d, ovDrag.t0 + d + w); drawAll();
+});
+const ovEnd = () => { ovDrag = null; ovCv.style.cursor = 'grab'; };
+ovCv.addEventListener('pointerup', ovEnd); ovCv.addEventListener('pointercancel', ovEnd);
+ovCv.addEventListener('wheel', e => { e.preventDefault(); const c = (st.view.t0 + st.view.t1) / 2, k = Math.pow(1.0018, e.deltaY); setView(c - (c - st.view.t0) * k, c + (st.view.t1 - c) * k); drawAll(); }, { passive: false });
+
+/* ---------- tooltip ---------- */
+const tip = $('tip');
+function hideTip() { tip.hidden = true; }
+function nearestIdx(T, n, t) { const i = lowerBound(T, n, t); if (i <= 0) return 0; if (i >= n) return n - 1; return (t - T[i - 1] < T[i] - t) ? i - 1 : i; }
+function showTip(x, y) {
+  const ix = st.ix, t = tOf(x);
+  const rows = [];
+  let mode = null; for (const sp of ix.modeSpans) { if (sp.t0 <= t && t < sp.t1) { mode = sp.mode; break; } }
+  const armed = ix.armed.some(a => t >= a.t0 && t <= a.t1);
+  const head = `<div class="t">${fmtT(t, 2)}</div>`;
+  rows.push(`<div class="r"><span>Mode</span><span>${mode === null ? '–' : esc(modeName(mode))}</span></div>`);
+  rows.push(`<div class="r"><span>State</span><span>${armed ? 'armed' : 'disarmed'}</span></div>`);
+  for (const p of st.plot) {
+    const s = p.s.stream; if (!s.n) continue;
+    const i = nearestIdx(s.t, s.n, t);
+    const ok = Math.abs(s.t[i] - t) < Math.max(3 * ix.sampleUs, 2e6);
+    rows.push(`<div class="r"><span><i style="background:var(--${p.color})"></i>${esc(p.id)}</span><span>${ok ? fmtNum(s.v[p.s.k][i]) + (p.s.unit ? ' ' + esc(p.s.unit) : '') : '–'}</span></div>`);
+  }
+  const tol = 5 * (st.view.t1 - st.view.t0) / (G.W - G.L - G.R);
+  const near = [];
+  if (y < G.laneY0) {
+    for (const e of ix.errs) if (Math.abs(e.t - t) <= tol && near.length < 4) near.push(`<div class="m err">ERR subsystem ${e.sub}, code ${e.code} at ${fmtT(e.t, 2)}</div>`);
+    for (const m of ix.msgs) if (Math.abs(m.t - t) <= tol && near.length < 5) near.push(`<div class="m">${fmtT(m.t, 2)} ${esc(m.text)}</div>`);
+  }
+  tip.innerHTML = head + rows.join('') + near.join('');
+  tip.hidden = false;
+  const bw = $('chartBox').clientWidth, tw = tip.offsetWidth;
+  tip.style.left = (x + 14 + tw > bw ? Math.max(0, x - tw - 14) : x + 14) + 'px';
+  tip.style.top = Math.max(0, Math.min(y + 12, G.H - tip.offsetHeight)) + 'px';
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+
+/* ---------- wiring ---------- */
+$('fileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) openFile(f, false); e.target.value = ''; });
+$('openBtn').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('fileInput').click(); } });
+$('scanCancel').onclick = () => { st.cancelScan = true; };
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { dragDepth++; $('dropzone').hidden = false; e.preventDefault(); } });
+window.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('dropzone').hidden = true; });
+window.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true; const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) openFile(f, false); });
+$('seriesAdd').addEventListener('change', () => { const v = $('seriesAdd').value.trim(); if (!v) return; if (addSeries(v)) $('seriesAdd').value = ''; else if (st.ix && !st.ix.series.some(s => s.id.toLowerCase() === v.toLowerCase())) setStatus(`No field called ${v} in this log.`, true); });
+$('seriesAdd').addEventListener('keydown', e => { if (e.key === 'Enter') $('seriesAdd').dispatchEvent(new Event('change')); });
+$('zoomAll').onclick = () => { if (!st.ix) return; setView(st.ix.tMin, st.ix.tMax); drawAll(); };
+$('zoomSel').onclick = () => { if (!st.sel) return; const pad = (st.sel.t1 - st.sel.t0) * 0.08 + 1e6; setView(st.sel.t0 - pad, st.sel.t1 + pad); drawAll(); };
+for (const id of ['selStart', 'selEnd']) {
+  $(id).addEventListener('change', commitSelInputs);
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $(id).blur(); } });
+}
+$('addSeg').onclick = () => {
+  if (!st.sel) return;
+  st.parts.push({ name: 'Selection ' + (st.parts.length + 1), t0: st.sel.t0, t1: st.sel.t1 });
+  st.parts.sort((a, b) => a.t0 - b.t0);
+  st.activePart = st.parts.findIndex(p => p.t0 === st.sel.t0 && p.t1 === st.sel.t1);
+  renderParts(); drawAll();
+};
+$('saveSel').onclick = () => {
+  if (!st.sel) return;
+  const whole = st.sel.t0 <= st.ix.tMin && st.sel.t1 >= st.ix.tMax;
+  const name = (whole ? 'whole' : 'selection') + (st.exclude.size ? '-filtered' : '');
+  savePart({ name, t0: st.sel.t0, t1: st.sel.t1 }, null);
+};
+$('selAll').onclick = () => {
+  if (!st.ix) return;
+  st.sel = { t0: st.ix.tMin, t1: st.ix.tMax }; st.activePart = -1;
+  setView(st.ix.tMin, st.ix.tMax);
+  for (const tr of $('partsBody').children) tr.classList.remove('active');
+  updateSel(); drawAll();
+};
+$('autoArm').onclick = () => { if (autoArm(false) === 0) return; };
+$('autoSize').onclick = autoSize;
+$('clearParts').onclick = () => { st.parts = []; st.activePart = -1; renderParts(); drawAll(); setStatus(''); };
+$('saveAll').onclick = saveAll;
+for (const id of ['optParams', 'optMsgs', 'optMission', 'optState', 'optOrigin', 'optRetime']) $(id).addEventListener('change', () => { renderParts(); updateSel(); });
+let rz = 0;
+window.addEventListener('resize', () => { cancelAnimationFrame(rz); rz = requestAnimationFrame(resize); });
+const mq = window.matchMedia('(prefers-color-scheme: dark)');
+const retheme = () => { readColors(); drawAll(); };
+mq.addEventListener ? mq.addEventListener('change', retheme) : mq.addListener(retheme);
+new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+readColors(); renderParts(); updateSel(); resize();
+const demo = DF.demoLog();
+openFile(new File([demo], 'demo-copter.bin'), true);
+})();
+</script>
+</body>
+</html>

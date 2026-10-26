@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data tools</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 24c5-9 9-13 13-13s8 4 13 13' fill='none' stroke='%238E2C6F' stroke-width='3'/%3E%3Cpath d='M3 29c5-6 9-9 13-9s8 3 13 9' fill='none' stroke='%231D2B33' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/base.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Data tools</h1>
+      <a class="back" href="/">All apps</a>
+      <p class="host" id="host"></p>
+    </div>
+    <div class="top-actions">
+      <button type="button" class="jobchip" id="jobchip" hidden></button>
+      <button type="button" class="btn" id="run-checks">Run checks</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="schematic" aria-labelledby="overall">
+      <p class="overall" id="overall" aria-live="polite">Checking the servers…</p>
+      <div class="diagram-wrap">
+        <svg id="diagram" viewBox="0 0 1000 308" role="img" aria-label="How data flows from source files to the servers"></svg>
+      </div>
+      <ul class="diagram-list" id="diagram-list"></ul>
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button type="button" role="tab" id="t-health" aria-controls="tab-health" aria-selected="true" data-tab="health">Health</button>
+      <button type="button" role="tab" id="t-build" aria-controls="tab-build" aria-selected="false" data-tab="build">Build data</button>
+      <button type="button" role="tab" id="t-files" aria-controls="tab-files" aria-selected="false" data-tab="files">Files</button>
+    </nav>
+
+    <section class="tab" id="tab-health" role="tabpanel" aria-labelledby="t-health">
+      <div id="health"></div>
+      <p class="note" id="health-time"></p>
+    </section>
+
+    <section class="tab" id="tab-build" role="tabpanel" aria-labelledby="t-build" hidden>
+      <div class="build">
+        <form id="build-form" class="build-form" novalidate>
+          <fieldset class="tools">
+            <legend>What to build</legend>
+            <label class="tool"><input type="radio" name="kind" value="mbtiles" checked>
+              <span class="tool-name">Map tiles</span>
+              <span class="tool-desc">Satellite image or orthophoto to an .mbtiles file for the map tile server</span></label>
+            <label class="tool"><input type="radio" name="kind" value="terrain">
+              <span class="tool-name">Terrain</span>
+              <span class="tool-desc">Elevation model to the 3D terrain the log viewer draws</span></label>
+            <label class="tool"><input type="radio" name="kind" value="elevation">
+              <span class="tool-name">Elevation pieces</span>
+              <span class="tool-desc">Elevation model cut into pieces for the elevation API</span></label>
+            <label class="tool"><input type="radio" name="kind" value="check-terrain">
+              <span class="tool-name">Check terrain</span>
+              <span class="tool-desc">Read every terrain tile and compare it with the elevation model</span></label>
+          </fieldset>
+
+          <fieldset class="sources">
+            <legend id="src-legend">Source files</legend>
+            <div id="src-pick" class="src-pick"></div>
+          </fieldset>
+
+          <fieldset class="opts" data-for="mbtiles">
+            <legend>Options</legend>
+            <div class="grid">
+              <label>Tile set name <input name="name" value="custom" pattern="[A-Za-z0-9_-]+" autocomplete="off">
+                <small>The log viewer's Local Imagery layer reads <code>custom</code></small></label>
+              <label>Image format
+                <select name="format">
+                  <option value="auto" selected>JPEG, PNG at edges</option>
+                  <option value="jpeg">JPEG</option>
+                  <option value="png">PNG</option>
+                  <option value="webp">WebP</option>
+                </select></label>
+              <label>JPEG/WebP quality <input name="quality" type="number" min="1" max="100" value="85"></label>
+              <label>Deepest zoom <input name="max_zoom" type="number" min="0" max="22" placeholder="from image">
+                <small>The log viewer asks for up to 17</small></label>
+            </div>
+            <label class="check"><input type="checkbox" name="overwrite"> Replace the file if it exists</label>
+          </fieldset>
+
+          <fieldset class="opts" data-for="terrain" hidden>
+            <legend>Options</legend>
+            <div class="grid">
+              <label>Deepest level <input name="max_zoom" type="number" min="0" max="20" placeholder="from DEM"></label>
+              <label>Close-up error, m <input name="max_zoom_error" type="number" min="0.1" step="0.1" placeholder="auto">
+                <small>Default: 9.4 at level 11, 4.7 at 12</small></label>
+              <label>Mesh quality <input name="quality" type="number" min="0.05" max="4" step="0.05" value="1">
+                <small>Lower means more triangles</small></label>
+            </div>
+            <div class="radios" role="radiogroup" aria-label="Existing terrain">
+              <label class="check"><input type="radio" name="mode" value="clean" checked> Replace the terrain in data/terrain</label>
+              <label class="check"><input type="radio" name="mode" value="resume"> Continue an interrupted build</label>
+            </div>
+          </fieldset>
+
+          <fieldset class="opts" data-for="elevation" hidden>
+            <legend>Options</legend>
+            <div class="grid">
+              <label>Piece size, px <input name="piece_size" type="number" min="200" max="20000" value="2000"></label>
+            </div>
+            <label class="check"><input type="checkbox" name="replace" checked> Replace pieces of the same name</label>
+            <label class="check"><input type="checkbox" name="restart" checked> Restart the elevation server when done</label>
+          </fieldset>
+
+          <fieldset class="opts" data-for="check-terrain" hidden>
+            <legend>Options</legend>
+            <p class="note">Checks data/terrain. Tick an elevation model above to also compare heights with it.</p>
+          </fieldset>
+
+          <div class="cmd">
+            <span class="cmd-label">Same as</span>
+            <code id="cmd-preview"></code>
+          </div>
+          <p class="form-error" id="form-error" role="alert" hidden></p>
+          <button type="submit" class="btn btn-primary" id="run-job">Build map tiles</button>
+        </form>
+
+        <section class="job" aria-labelledby="job-title">
+          <div class="job-head">
+            <h2 id="job-title">No job yet</h2>
+            <span class="job-state" id="job-state"></span>
+          </div>
+          <div class="bar" id="job-bar" hidden><span></span></div>
+          <code class="job-cmd" id="job-cmd"></code>
+          <pre class="log" id="job-log" tabindex="0" aria-label="Job output" data-empty="Pick what to build and a source file, then start it. The output shows up here."></pre>
+          <ul class="job-notes" id="job-notes"></ul>
+          <div class="job-actions">
+            <button type="button" class="btn" id="job-cancel" hidden>Cancel job</button>
+          </div>
+          <h3 class="sub">Recent jobs</h3>
+          <ol class="history" id="history"></ol>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-files" role="tabpanel" aria-labelledby="t-files" hidden>
+      <div class="files">
+        <section aria-labelledby="h-src">
+          <h2 id="h-src">Source files <span class="path">data/src</span></h2>
+          <label class="drop" id="drop">
+            <input type="file" id="upload" multiple>
+            <span><strong>Add files</strong> or drop them here: GeoTIFFs, or a .zip of a z/x/y tile folder. Big files can also be copied straight into <code>data/src</code> on the host.</span>
+          </label>
+          <ul class="uploads" id="uploads"></ul>
+          <ul class="src-list" id="src-list"></ul>
+          <p class="note" id="disk"></p>
+        </section>
+        <section aria-labelledby="h-served">
+          <h2 id="h-served">Served data</h2>
+          <div id="served"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="logdlg" aria-labelledby="logdlg-title">
+    <div class="dlg-head">
+      <h2 id="logdlg-title">Log</h2>
+      <button type="button" class="btn" id="logdlg-close">Close</button>
+    </div>
+    <pre class="log" id="logdlg-text"></pre>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
