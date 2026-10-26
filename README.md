@@ -136,7 +136,9 @@ curl -s "localhost:8082/elevation/v1/ele/?points=44.6,33.5"; echo
   and `docker compose restart elevation`.
 - **The log viewer** is the `logviewer.tar.gz` asset of a
   [Vexy-AA/UAVLogViewer release](https://github.com/Vexy-AA/UAVLogViewer/releases), downloaded when
-  the image is built and checked against the SHA-256 in `logviewer/Dockerfile`. v1.0.3 is the build of
+  the image is built and checked against the SHA-256 in `logviewer/Dockerfile`. Later rebuilds reuse
+  it without downloading again. On a slow link, download the file once (browser or curl) into
+  `logviewer/logviewer.tar.gz` and the build uses that copy instead. v1.0.3 is the build of
   the `blueos` branch at `0a6dbc6`. To update: put the new version and its `sha256sum` in
   `logviewer/Dockerfile` and the `image:` tag in `docker-compose.yml`, then
   `docker compose up -d --build logviewer`.
