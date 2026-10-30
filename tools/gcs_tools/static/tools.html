@@ -6,6 +6,7 @@
   <title>Data tools</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 24c5-9 9-13 13-13s8 4 13 13' fill='none' stroke='%238E2C6F' stroke-width='3'/%3E%3Cpath d='M3 29c5-6 9-9 13-9s8 3 13 9' fill='none' stroke='%231D2B33' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/base.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -33,6 +34,7 @@
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button type="button" role="tab" id="t-health" aria-controls="tab-health" aria-selected="true" data-tab="health">Health</button>
       <button type="button" role="tab" id="t-build" aria-controls="tab-build" aria-selected="false" data-tab="build">Build data</button>
+      <button type="button" role="tab" id="t-add" aria-controls="tab-add" aria-selected="false" data-tab="add">Add area</button>
       <button type="button" role="tab" id="t-files" aria-controls="tab-files" aria-selected="false" data-tab="files">Files</button>
     </nav>
 
@@ -139,6 +141,114 @@
       </div>
     </section>
 
+    <section class="tab" id="tab-add" role="tabpanel" aria-labelledby="t-add" hidden>
+      <div class="add">
+        <form id="add-form" class="add-form" novalidate>
+          <p class="lede">Put a new area next to, or over, the map data you already have. Nothing is rebuilt from scratch:
+            only what the new area touches changes, and every change can be undone under <a href="#restore-h">Restore points</a>.</p>
+
+          <fieldset>
+            <legend>1. New area files <span class="path">data/src</span></legend>
+            <div class="grid grid-wide">
+              <div class="imagery-pick">
+                <label>Imagery
+                  <select name="imagery" id="add-imagery"></select>
+                  <small>A z/x/y tile folder, an .mbtiles file, an imagery GeoTIFF, or another tile set you already serve</small></label>
+                <ul class="img-problems" id="add-img-problems" hidden></ul>
+                <div class="rows-box" id="add-rows-box" hidden>
+                  <label>Tile rows
+                    <select name="rows" id="add-rows">
+                      <option value="auto" id="add-rows-auto">Detect</option>
+                      <option value="xyz">XYZ (Google, OSM, SAS.Planet)</option>
+                      <option value="tms">TMS (MBTiles, gdal2tiles)</option>
+                    </select></label>
+                  <small id="add-rows-note"></small>
+                </div>
+              </div>
+              <label>Elevation model
+                <select name="dem" id="add-dem"></select>
+                <small>A DEM GeoTIFF; it feeds both terrain and elevation</small></label>
+            </div>
+            <p class="note" id="add-nofiles" hidden>Put the new files in data/src first (Files tab, or copy them there on the host).</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>2. Add it to</legend>
+            <div class="targets">
+              <div class="target" id="tg-mbtiles">
+                <label class="target-head"><input type="checkbox" name="do_mbtiles" id="do-mbtiles">
+                  <span class="tool-name">Map tiles</span>
+                  <select name="tileset" id="add-tileset" aria-label="Tile set to add to"></select></label>
+                <span class="tool-desc" id="tg-mbtiles-desc">New tiles are added; where both have a tile the two are combined.</span>
+                <div class="target-opts">
+                  <label class="check"><input type="checkbox" name="lower_zooms" checked> Build zoomed-out levels for the new area</label>
+                  <label class="check"><input type="checkbox" name="black_empty"> Treat black edges as empty (JPEG tiles with black borders)</label>
+                </div>
+              </div>
+              <div class="target" id="tg-terrain">
+                <label class="target-head"><input type="checkbox" name="do_terrain" id="do-terrain">
+                  <span class="tool-name">Terrain</span></label>
+                <span class="tool-desc" id="tg-terrain-desc">Only tiles that touch the new area are made again; old heights come from the elevation pieces.</span>
+              </div>
+              <div class="target" id="tg-elevation">
+                <label class="target-head"><input type="checkbox" name="do_elevation" id="do-elevation">
+                  <span class="tool-name">Elevation pieces</span></label>
+                <span class="tool-desc" id="tg-elevation-desc">New pieces where there are none, so pieces never overlap.</span>
+                <div class="target-opts">
+                  <label class="check"><input type="checkbox" name="fill_holes" checked> Fill no-data holes in existing pieces from the new file</label>
+                  <label class="check"><input type="checkbox" name="restart" checked> Restart the elevation server when done</label>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset class="prefer">
+            <legend>3. Where the new area overlaps what you have</legend>
+            <label class="choice"><input type="radio" name="prefer" value="existing" checked>
+              <span class="tool-name">Keep what I have</span>
+              <span class="tool-desc">The new files only fill places that have no data yet. Existing tiles, heights and pieces stay as they are.</span></label>
+            <label class="choice"><input type="radio" name="prefer" value="new">
+              <span class="tool-name">Use the new files</span>
+              <span class="tool-desc">The new files win wherever they have data; the old data stays outside them and fills their gaps.</span></label>
+          </fieldset>
+
+          <div class="cmd cmd-multi">
+            <span class="cmd-label">Same as</span>
+            <code id="add-cmd"></code>
+          </div>
+          <p class="form-error" id="add-error" role="alert" hidden></p>
+          <div class="add-buttons">
+            <button type="button" class="btn" id="add-check">Check first</button>
+            <button type="submit" class="btn btn-primary" id="add-run">Add the new area</button>
+          </div>
+          <p class="note">Check first lists what would change without touching anything. Jobs run one after another; you can leave the page.</p>
+        </form>
+
+        <div class="add-side">
+          <div class="add-map-wrap">
+            <div id="add-map" class="add-map" role="img" aria-label="Map of the existing data and the new area"></div>
+          </div>
+          <ul class="legend" id="add-legend">
+            <li><span class="sw sw-tiles"></span>Map tiles now</li>
+            <li><span class="sw sw-terrain"></span>Terrain now</li>
+            <li><span class="sw sw-pieces"></span>Elevation pieces</li>
+            <li><span class="sw sw-new"></span>New imagery</li>
+            <li><span class="sw sw-newdem"></span>New elevation model</li>
+          </ul>
+          <ul class="add-summary" id="add-summary" aria-live="polite"></ul>
+        </div>
+      </div>
+
+      <div class="add-lower">
+        <div id="add-job-slot"></div>
+        <section class="restore" aria-labelledby="restore-h">
+          <h2 id="restore-h">Restore points</h2>
+          <p class="note">Each change keeps the files it replaced. Restoring puts them back exactly; changes to the same data are undone newest first.</p>
+          <ul class="restore-list" id="restore-list"></ul>
+        </section>
+      </div>
+    </section>
+
     <section class="tab" id="tab-files" role="tabpanel" aria-labelledby="t-files" hidden>
       <div class="files">
         <section aria-labelledby="h-src">
@@ -165,8 +275,14 @@
       <button type="button" class="btn" id="logdlg-close">Close</button>
     </div>
     <pre class="log" id="logdlg-text"></pre>
+    <div class="dlg-foot">
+      <button type="button" class="btn btn-primary" id="logdlg-repair" hidden>Make a repaired copy</button>
+      <button type="button" class="btn" id="logdlg-deep" hidden>Also check the whole file for damage</button>
+    </div>
   </dialog>
 
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/add.js"></script>
 </body>
 </html>

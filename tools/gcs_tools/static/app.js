@@ -41,7 +41,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // ---------- state ----------
 const S = {
-  info: null, check: null, data: null, srcInfo: {},
+  info: null, check: null, data: null, srcInfo: {}, srcPending: {},
   jobs: [], viewJob: null, logNext: 0, pollTimer: null, checking: false,
 };
 const HOST = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
@@ -215,7 +215,7 @@ function showService(key) {
 // links like /tools#health, /tools#files, /tools#build=terrain open a tab (and a builder)
 function applyHash() {
   const [tab, val] = location.hash.replace(/^#/, '').split('=');
-  if (!['health', 'build', 'files'].includes(tab)) return false;
+  if (!['health', 'build', 'add', 'files'].includes(tab)) return false;
   selectTab(tab);
   const radio = val && $(`input[name="kind"][value="${CSS.escape(val)}"]`);
   if (radio) { radio.checked = true; onKindChange(); }
@@ -223,12 +223,18 @@ function applyHash() {
 }
 window.addEventListener('hashchange', applyHash);
 function selectTab(name) {
+  if (!$(`#tab-${name}`)) name = 'health';
   for (const b of $$('.tabs button')) {
     const on = b.dataset.tab === name;
     b.setAttribute('aria-selected', String(on));
     $(`#tab-${b.dataset.tab}`).hidden = !on;
   }
+  // one job panel, shown next to whichever form started the job
+  const job = $('section.job');
+  if (name === 'add' && job.parentElement.id !== 'add-job-slot') $('#add-job-slot').appendChild(job);
+  if (name === 'build' && job.parentElement !== $('.build')) $('.build').appendChild(job);
   try { localStorage.setItem('gcs-tab', name); } catch { /* storage unavailable */ }
+  if (window.onTabShown) window.onTabShown(name);
 }
 $('.tabs').addEventListener('click', (ev) => {
   const b = ev.target.closest('button[data-tab]');
@@ -344,23 +350,87 @@ async function loadData() {
   drawDiagram();
   renderFiles();
   renderSourcePick();
+  if (window.onDataChanged) window.onDataChanged();
   fetchSrcInfo();
 }
 
+// three at a time, so one big file that takes long to read doesn't hold up the rest
 async function fetchSrcInfo() {
   if (!S.data) return;
-  for (const f of S.data.src) {
+  const todo = S.data.src.filter((f) => !S.srcInfo[`${f.name}|${f.mtime}`] && !S.srcPending[`${f.name}|${f.mtime}`]);
+  const one = async (f) => {
     const key = `${f.name}|${f.mtime}`;
-    if (S.srcInfo[key]) continue;
+    S.srcPending[key] = true;
     try {
       S.srcInfo[key] = await api(`/api/src/info?path=${encodeURIComponent(f.name)}`);
     } catch (e) {
-      S.srcInfo[key] = { kind: 'unknown', summary: e.message, use: [] };
+      S.srcInfo[key] = { kind: 'unknown', summary: `could not read it: ${e.message}`, use: [], tileish: true };
     }
+    delete S.srcPending[key];
     renderFiles();
     renderSourcePick();
+    if (window.onDataChanged) window.onDataChanged();
+  };
+  const queue = todo.slice();
+  await Promise.all([0, 1, 2].map(async () => { while (queue.length) await one(queue.shift()); }));
+}
+
+// ---------- "Check" a tile file: runs ./gcs-tools inspect and shows its report live ----------
+const TILE_EXT = /\.(mbtiles|sqlitedb|sqlite3?|db)$/i;
+function canCheck(f, info) {
+  if (TILE_EXT.test(f.name) || f.dir) return true;
+  return !!(info && (info.tileish || (!(info.use || []).length && info.kind !== 'zip')));
+}
+// runs a job and shows its log live in the dialog; returns the job's last state and text
+async function runInDialog(kind, params, title) {
+  const text = $('#logdlg-text');
+  const dlg = $('#logdlg');
+  $('#logdlg-title').textContent = `${title}…`;
+  text.textContent = '';
+  $('#logdlg-deep').hidden = true;
+  $('#logdlg-repair').hidden = true;
+  if (!dlg.open) dlg.showModal();
+  let job;
+  try {
+    job = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, params }) });
+  } catch (e) { text.textContent = e.message; return { status: 'failed', text: e.message }; }
+  let next = 0;
+  for (;;) {
+    let j;
+    try { j = await api(`/api/jobs/${job.id}?since=${next}`); } catch { await new Promise((r) => setTimeout(r, 1500)); continue; }
+    if (j.lines.length) {
+      text.textContent += (text.textContent ? '\n' : '') + j.lines.join('\n');
+      text.scrollTop = text.scrollHeight;
+    }
+    next = j.next;
+    if (!['queued', 'running'].includes(j.status)) return { status: j.status, text: text.textContent };
+    $('#logdlg-title').textContent = j.status === 'queued' ? `${title}: waiting for the running job to finish…` : `${title}…`;
+    await new Promise((r) => setTimeout(r, 700));
   }
 }
+
+async function checkFile(params, label) {
+  const target = ($('#add-tileset') || {}).value || 'custom';
+  const r = await runInDialog('inspect', { ...params, target }, `Checking ${label}`);
+  const ok = /RESULT: usable/.test(r.text);
+  $('#logdlg-title').textContent = `${label}: ${ok ? 'can be used' : r.status === 'cancelled' ? 'check cancelled' : 'can\'t be used'}`;
+  const deep = $('#logdlg-deep');
+  deep.hidden = !ok || /checking the whole file|no damage found/.test(r.text) || !TILE_EXT.test(label);
+  deep.onclick = () => checkFile({ ...params, deep: true }, label);
+  const rep = $('#logdlg-repair');
+  rep.hidden = !/is damaged/.test(r.text) || !params.sources;
+  rep.onclick = () => repairFile(params.sources[0]);
+}
+
+async function repairFile(name) {
+  const r = await runInDialog('repair', { sources: [name] }, `Repairing ${name}`);
+  const m = r.text.match(/RESULT: repaired: use (.+?) as the new imagery/);
+  $('#logdlg-title').textContent = m ? `${name}: repaired copy ${m[1]} is ready` : `${name}: not repaired`;
+  loadData();
+}
+window.repairFile = repairFile;
+window.checkFile = checkFile;
 const infoFor = (f) => S.srcInfo[`${f.name}|${f.mtime}`];
 
 function renderFiles() {
@@ -379,9 +449,11 @@ function renderFiles() {
       rows.push(['What', 'reading…']);
     }
     const use = info && info.use && info.use[0];
-    const act = use === 'unpack'
+    const label = use && use.startsWith('add-') ? 'Add as new area' : 'Build from it';
+    const act = (use === 'unpack'
       ? `<button type="button" class="btn btn-small" data-unpack="${esc(f.name)}">Unpack</button>`
-      : use ? `<button type="button" class="btn btn-small" data-use="${esc(use)}" data-name="${esc(f.name)}">Build from it</button>` : '';
+      : use ? `<button type="button" class="btn btn-small" data-use="${esc(use)}" data-name="${esc(f.name)}">${label}</button>` : '')
+      + (canCheck(f, info) ? `<button type="button" class="btn btn-small" data-check="${esc(f.name)}">Check</button>` : '');
     return `<li><div><span class="nm">${esc(f.name)}${f.dir ? '/' : ''}</span>
         <div class="meta">${f.dir ? 'folder' : fmtSize(f.size)}, ${esc(fmtDate(f.mtime))}</div></div>
       <div class="acts">
@@ -411,6 +483,8 @@ function renderFiles() {
 }
 
 $('#src-list').addEventListener('click', async (ev) => {
+  const chk = ev.target.closest('[data-check]');
+  if (chk) { checkFile({ sources: [chk.dataset.check] }, chk.dataset.check); return; }
   const unpack = ev.target.closest('[data-unpack]');
   if (unpack) {
     try {
@@ -428,6 +502,10 @@ $('#src-list').addEventListener('click', async (ev) => {
     if (!confirm(`Delete data/src/${name}? This can't be undone.`)) return;
     try { await api(`/api/src?path=${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (e) { alert(e.message); }
     loadData();
+  }
+  if (use && use.dataset.use.startsWith('add-')) {
+    if (window.addPick) window.addPick(use.dataset.use, use.dataset.name);
+    return;
   }
   if (use) {
     $(`input[name="kind"][value="${use.dataset.use}"]`).checked = true;
@@ -629,6 +707,7 @@ async function pollJob() {
     S.lastFinished = j.id;
     loadJobs();
     if (j.started && Date.now() / 1000 - j.ended < 30) { loadData(); setTimeout(runChecks, 1500); }
+    if (window.onJobFinished) window.onJobFinished(j);
   }
 }
 
@@ -644,7 +723,7 @@ function updateChip(j) {
 $('#jobchip').addEventListener('click', () => selectTab('build'));
 
 $('#job-cancel').addEventListener('click', async () => {
-  if (S.viewJob == null || !confirm('Cancel this job? A terrain build can be continued later.')) return;
+  if (S.viewJob == null || !confirm('Cancel this job? A terrain build can be continued later; an "add" job changes nothing until it is complete.')) return;
   try { await api(`/api/jobs/${S.viewJob}/cancel`, { method: 'POST' }); } catch (e) { alert(e.message); }
   pollJob();
 });

@@ -85,11 +85,13 @@ services:
   # Same image is the command line: ./gcs-tools <command>  (see tools/README.md)
   tools:
     build: ./tools
-    image: offline-gcs-tools:1.1.0
+    image: offline-gcs-tools:1.2.0
     restart: unless-stopped
     command: ["serve", "--port", "8095"]
     volumes:
       - ./data:/data
+      - ./tools/gcs_tools:/opt/gcs-tools/gcs_tools:ro   # run the repo's code, no rebuild needed
+      - ./tools/tests:/opt/gcs-tools/tests:ro
       - ./open-elevation:/opt/open-elevation:ro   # for create-tiles.sh
       # Lets the page show container status and logs, and restart the elevation
       # server after new pieces are built. It also gives this container control

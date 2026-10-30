@@ -177,3 +177,71 @@ dialog .log { height: min(70vh, 640px); }
 @media (prefers-reduced-motion: reduce) {
   .bar span { transition: none; }
 }
+
+/* ---------- add area ---------- */
+.add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+.lede { margin: 0 0 20px; color: var(--ink-2); max-width: 62ch; }
+legend .path { font-family: var(--mono); font-weight: 400; }
+.grid-wide { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.targets { display: grid; gap: 8px; }
+.target, .prefer .choice {
+  position: relative; display: block; padding: 10px 12px 10px 38px;
+  background: var(--panel); border: 1px solid var(--line-soft); border-radius: 4px;
+}
+.target-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; cursor: pointer; }
+.target-head input, .prefer .choice input { position: absolute; left: 12px; top: 13px; accent-color: var(--accent); }
+.target-head select {
+  font: 400 15px/1.2 var(--body); color: var(--ink);
+  background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px;
+}
+.target:has(.target-head input:checked), .prefer .choice:has(input:checked) { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.target.off { opacity: 0.62; }
+.target.off .target-head { cursor: default; }
+.target-opts { display: none; }
+.target:has(.target-head input:checked) .target-opts { display: block; }
+.target-opts .check { margin-top: 6px; font-size: 15px; }
+.prefer .choice { margin-bottom: 8px; cursor: pointer; }
+.cmd-multi { flex-direction: column; gap: 4px; }
+.cmd-multi code { white-space: pre-wrap; }
+.add-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+.add-side { position: sticky; top: 12px; }
+.add-map-wrap { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #DDE6EA; }
+.add-map { height: 460px; background: #DDE6EA; }
+.add-map.leaflet-container { font-family: var(--body); }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 0; padding: 0; font-size: 14px; color: var(--ink-2); }
+.legend .sw { display: inline-block; width: 22px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 2px; }
+.sw-tiles { border: 2px dashed var(--info); }
+.sw-terrain { border: 2px dotted var(--ok); }
+.sw-pieces { border: 1px solid rgba(29, 43, 51, 0.55); }
+.sw-new { background: rgba(142, 44, 111, 0.16); border: 2px solid var(--accent); }
+.sw-newdem { background: rgba(142, 44, 111, 0.08); border: 2px dashed var(--accent); }
+.add-summary { margin: 12px 0 0; padding-left: 18px; font-size: 15px; }
+.add-summary li { margin: 3px 0; }
+.add-lower { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 32px; margin-top: 30px; align-items: start; }
+#add-job-slot .job { position: static; }
+.restore h2 { font-size: 20px; }
+.restore .note { margin-top: 4px; }
+.restore-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.restore-list > li { border-top: 1px solid var(--line-soft); padding: 10px 0; display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; }
+.restore-list .nm { font-weight: 600; }
+.restore-list .meta { font-size: 14px; color: var(--ink-2); }
+.restore-list .acts { display: flex; gap: 6px; align-items: start; }
+@media (max-width: 860px) {
+  .add, .add-lower { grid-template-columns: 1fr; }
+  .add-side { position: static; }
+  .add-map { height: 340px; }
+}
+.cmd-multi code { word-break: normal; overflow-wrap: anywhere; }
+.imagery-pick { display: grid; gap: 10px; align-content: start; }
+.rows-box { padding: 8px 10px; border-left: 3px solid var(--line-soft); }
+.rows-box label { font-size: 15px; font-weight: 500; }
+.rows-box small { display: block; color: var(--ink-2); font-size: 13px; margin-top: 4px; }
+.dlg-foot { margin-top: 10px; display: flex; gap: 8px; }
+.img-problems { list-style: none; margin: 0; padding: 8px 10px; background: #fff; border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--warn); border-radius: 4px; font-size: 14px; }
+.img-problems li { padding: 3px 0; }
+.img-problems .nm { font-weight: 600; word-break: break-all; }
+.img-problems .why { color: var(--ink-2); }
+.img-problems button { font: inherit; color: var(--accent); background: none; border: 0; padding: 0;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer; margin-left: 4px; }
+.src-list .acts { flex-wrap: wrap; justify-content: flex-end; }

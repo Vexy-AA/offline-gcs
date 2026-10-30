@@ -456,7 +456,8 @@ def _pack_dir(args, root, tmp_out):
 # --------------------------------------------------------------------------
 
 def summarize(path):
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    from .tilesource import open_ro
+    db = open_ro(path)
     meta = dict(db.execute("SELECT name, value FROM metadata"))
     rows = db.execute("SELECT zoom_level, COUNT(*) FROM tiles GROUP BY zoom_level ORDER BY zoom_level").fetchall()
     mix = db.execute("SELECT hex(substr(tile_data, 1, 2)), COUNT(*) FROM tiles GROUP BY 1").fetchall()

@@ -7,7 +7,8 @@ all in one `docker compose` stack. No internet required at runtime (only to buil
 server is up. It also has:
 
 - the data tools (`/tools`): build map tiles, terrain and elevation pieces from your own rasters,
-  check every server, and upload source files
+  add a new area to them without rebuilding the old one (with undo), check every server, and
+  upload source files
 - an elevation viewer (`/elevation`)
 - the DataFlash log splitter (`/log-splitter`)
 
@@ -33,6 +34,7 @@ offline-gcs/                      (this git repo)
     mbtiles/custom.mbtiles
     terrain/layer.json, 0/, 1/ ...  (NOT terrain/quantized/...)
     elevation/*.tif               (summary.json is created on first start)
+    backups/                      restore points of the "add area" tools (never served)
 ```
 
 ## Setup
@@ -67,7 +69,7 @@ offline-gcs/                      (this git repo)
 **Offline machine:** build the images where there is internet, then copy them over:
 ```bash
 docker compose build
-docker save offline-gcs-tools:1.1.0 offline-gcs-elevation offline-gcs-logviewer:v1.0.3 nginx:alpine \
+docker save offline-gcs-tools:1.2.0 offline-gcs-elevation offline-gcs-logviewer:v1.0.3 nginx:alpine \
   ghcr.io/consbio/mbtileserver:latest \
   | gzip > gcs-images.tar.gz          # then on the offline machine: docker load < gcs-images.tar.gz
 ```
@@ -87,6 +89,27 @@ the matching command line. The same from a terminal:
 mbtileserver picks up new `.mbtiles` files by itself, terrain is static files (hard-refresh the
 browser), and the tools page restarts the elevation server for you after cutting pieces. Inputs
 can be any GDAL format and projection. Details and options: [tools/README.md](tools/README.md).
+
+## Adding a new area to existing data
+
+Got a second region that borders or overlaps the first, but not the first one's source
+files any more? On the front page choose **Add an area** (or `/tools#add`): pick the new
+imagery (a z/x/y tile folder or an .mbtiles file in `data/src`, an imagery GeoTIFF, or a tile
+set already in `data/mbtiles`) and the new elevation model, tick
+what to add them to, choose whether the old or the new data wins where they overlap, press
+**Check first** to see what would change, then **Add the new area**. Map tiles are merged
+into the existing `.mbtiles`, only the terrain tiles touching the new area are remade (the
+old heights come from the elevation pieces), and new elevation pieces are cut so none
+overlap. Each change can be undone under **Restore points**. From a terminal:
+
+```bash
+./gcs-tools add-mbtiles   data/src/NorthXYZ     data/mbtiles/custom.mbtiles   # or data/src/north.mbtiles
+./gcs-tools add-terrain   data/src/northBig.tif data/terrain
+./gcs-tools add-elevation data/src/northBig.tif && docker compose restart elevation
+./gcs-tools backups       # list; ./gcs-tools backups restore <id> undoes one
+```
+
+Details: [tools/README.md, Adding an area](tools/README.md#adding-an-area).
 
 ## URLs (replace `localhost` with the host's LAN IP from other machines)
 

@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-from . import __version__, dockerapi, stackcheck
+from . import __version__, backups, dockerapi, stackcheck, tilesource
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 DATA = os.path.abspath(os.environ.get("GCS_DATA_DIR", "/data"))
@@ -244,6 +244,39 @@ def _after_mbtiles(job):
                      "If it doesn't show up, restart mbtiles.")
 
 
+def _after_terrain(job):
+    job.notes.append("Terrain is plain files: hard-refresh the log viewer (Ctrl+Shift+R) to see the change.")
+
+
+def _after_restore(job):
+    kind = getattr(job, "restore_kind", None)
+    if kind == "elevation":
+        _after_elevation(job)
+    elif kind == "mbtiles":
+        _after_mbtiles(job)
+    elif kind == "terrain":
+        _after_terrain(job)
+
+
+BACKUPS = os.path.join(DATA, "backups")
+
+
+def tileset_path(name):
+    if not NAME_RE.match(name or ""):
+        raise ApiError("tile set name: letters, digits, - and _ only")
+    path = os.path.join(DATA, "mbtiles", f"{name}.mbtiles")
+    if not os.path.isfile(path):
+        raise ApiError(f"data/mbtiles/{name}.mbtiles not found", 404)
+    return path
+
+
+def _prefer(p):
+    v = p.get("prefer") or "existing"
+    if v not in ("existing", "new"):
+        raise ApiError("prefer must be existing or new")
+    return v
+
+
 def _num(params, key, lo, hi, cast=float):
     v = params.get(key)
     if v in (None, ""):
@@ -262,7 +295,7 @@ def build_job(kind, p):
     for s in sources:
         if not os.path.exists(s):
             raise ApiError(f"not found: {host_view(s)}")
-    if kind != "check-terrain" and not sources:
+    if kind not in ("check-terrain", "restore", "add-mbtiles", "inspect") and not sources:
         raise ApiError("choose at least one source file")
 
     if kind == "mbtiles":
@@ -311,6 +344,67 @@ def build_job(kind, p):
             args.append("--replace")
         return Job(kind, "Elevation pieces", args, _after_elevation if p.get("restart", True) else None)
 
+    if kind == "add-mbtiles":
+        name = p.get("target") or "custom"
+        if not NAME_RE.match(name):
+            raise ApiError("tile set name: letters, digits, - and _ only")
+        target = os.path.join(DATA, "mbtiles", f"{name}.mbtiles")
+        if not os.path.exists(target):
+            raise ApiError(f"data/mbtiles/{name}.mbtiles does not exist; build it on the Build data tab first", 404)
+        oname = None
+        if not sources and p.get("source_tileset"):
+            # another tile set that is already served (data/mbtiles/<name>.mbtiles)
+            other = tileset_path(p["source_tileset"])
+            if other == target:
+                raise ApiError("the new area and the tile set to add it to are the same file")
+            sources = [other]
+            oname = p["source_tileset"]
+
+        def after(job):
+            _after_mbtiles(job)
+            if oname:
+                job.notes.append(f"{oname}.mbtiles is still in data/mbtiles and served as its own tile set; "
+                                 "delete it on the host if you no longer need it.")
+        if not sources:
+            raise ApiError("choose the new imagery")
+        scheme = p.get("scheme") or "auto"
+        if scheme not in ("auto", "xyz", "tms"):
+            raise ApiError("scheme must be auto, xyz or tms")
+        args = ["add-mbtiles", *sources, target, "--prefer", _prefer(p)]
+        if scheme != "auto":
+            args += ["--scheme", scheme]
+        if p.get("lower_zooms") is False:
+            args.append("--no-lower-zooms")
+        if p.get("black_empty"):
+            args.append("--black-empty")
+        dry = bool(p.get("dry_run"))
+        if dry:
+            args.append("--dry-run")
+        return Job(kind, f"{'Check: ' if dry else ''}Add to map tiles ({name})", args, None if dry else after)
+
+    if kind == "add-terrain":
+        args = ["add-terrain", *sources, os.path.join(DATA, "terrain"), "--prefer", _prefer(p)]
+        v = _num(p, "max_zoom", 0, 20, int)
+        if v is not None:
+            args += ["--max-zoom", str(v)]
+        dry = bool(p.get("dry_run"))
+        if dry:
+            args.append("--dry-run")
+        return Job(kind, f"{'Check: ' if dry else ''}Add to terrain", args, None if dry else _after_terrain)
+
+    if kind == "add-elevation":
+        args = ["add-elevation", *sources, "--out", os.path.join(DATA, "elevation"), "--prefer", _prefer(p)]
+        size = _num(p, "piece_size", 200, 20000, int)
+        if size:
+            args += ["--piece-size", str(size)]
+        if p.get("fill_holes") is False:
+            args.append("--no-fill-holes")
+        dry = bool(p.get("dry_run"))
+        if dry:
+            args.append("--dry-run")
+        after = None if dry or not p.get("restart", True) else _after_elevation
+        return Job(kind, f"{'Check: ' if dry else ''}Add to elevation pieces", args, after)
+
     if kind == "unpack":
         if len(sources) != 1 or not sources[0].lower().endswith(".zip"):
             raise ApiError("choose one .zip file")
@@ -320,6 +414,45 @@ def build_job(kind, p):
             raise ApiError(f"{host_view(dest)} already exists; delete or rename it first", 409)
         return Job(kind, f"Unpack {os.path.basename(zpath)}", [], func=lambda job: unpack_zip(job, zpath, dest),
                    command=f"unzip {host_view(zpath)} -d {host_view(dest)}")
+
+    if kind == "inspect":
+        if p.get("tileset"):
+            path = tileset_path(p["tileset"])
+        elif len(sources) == 1:
+            path = sources[0]
+        else:
+            raise ApiError("choose one file to check")
+        args = ["inspect", path]
+        tname = p.get("target") or "custom"
+        if NAME_RE.match(tname) and os.path.exists(os.path.join(DATA, "mbtiles", f"{tname}.mbtiles")):
+            if os.path.abspath(path) != os.path.join(DATA, "mbtiles", f"{tname}.mbtiles"):
+                args += ["--target", os.path.join(DATA, "mbtiles", f"{tname}.mbtiles")]
+        if p.get("deep"):
+            args.append("--deep")
+        return Job(kind, f"Check {os.path.basename(path.rstrip('/'))}", args)
+
+    if kind == "repair":
+        if len(sources) != 1 or os.path.isdir(sources[0]):
+            raise ApiError("choose one tile file to repair")
+        from .repair_tiles import default_out
+        out = default_out(sources[0])
+        args = ["repair", sources[0]]
+        if p.get("overwrite"):
+            args.append("--overwrite")
+        elif os.path.exists(out):
+            raise ApiError(f"{host_view(out)} already exists; delete it first (Files tab)", 409)
+        return Job(kind, f"Repair {os.path.basename(sources[0])}", args)
+
+    if kind == "restore":
+        rid = p.get("id") or ""
+        point = next((m for m in backups.list_points(BACKUPS, with_size=False) if m["id"] == rid), None)
+        if point is None:
+            raise ApiError("no such restore point", 404)
+        if not point["restorable"]:
+            raise ApiError("restore the newer restore points of the same data first", 409)
+        job = Job(kind, f"Restore: {point['title']}", ["backups", "restore", rid, "--data", DATA], _after_restore)
+        job.restore_kind = point["kind"]
+        return job
 
     if kind == "check-terrain":
         args = ["check-terrain", os.path.join(DATA, "terrain")]
@@ -393,7 +526,7 @@ def mbtiles_info(path):
     info = {"name": os.path.relpath(path, os.path.join(DATA, "mbtiles"))[:-len(".mbtiles")],
             "size": os.path.getsize(path), "mtime": os.path.getmtime(path)}
     try:
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        db = tilesource.open_ro(path, timeout=2)
         meta = dict(db.execute("SELECT name, value FROM metadata"))
         db.close()
         info.update({k: meta.get(k) for k in ("format", "minzoom", "maxzoom", "bounds", "description")})
@@ -405,13 +538,21 @@ def mbtiles_info(path):
 def data_overview():
     out = {"src": [], "mbtiles": [], "terrain": None, "elevation": None}
     if os.path.isdir(SRC):
+        side = ("-wal", "-shm", "-journal")
         for name in sorted(os.listdir(SRC)):
-            if name.startswith("."):
+            if name.startswith(".") or name.endswith(side):
                 continue
             p = os.path.join(SRC, name)
             out["src"].append({"name": name, "dir": os.path.isdir(p),
                                "size": os.path.getsize(p) if os.path.isfile(p) else None,
                                "mtime": os.path.getmtime(p)})
+            # a tile file one folder down (copied in with its folder) is listed too
+            if os.path.isdir(p) and not any(n.isdigit() for n in os.listdir(p)):
+                for inner in sorted(os.listdir(p)):
+                    q = os.path.join(p, inner)
+                    if inner.lower().endswith(tilesource.SQLITE_EXTS) and os.path.isfile(q):
+                        out["src"].append({"name": f"{name}/{inner}", "dir": False, "size": os.path.getsize(q),
+                                           "mtime": os.path.getmtime(q), "inner": True})
     for p in sorted(glob.glob(os.path.join(DATA, "mbtiles", "**", "*.mbtiles"), recursive=True)):
         out["mbtiles"].append(mbtiles_info(p))
     layer = os.path.join(DATA, "terrain", "layer.json")
@@ -435,6 +576,7 @@ def data_overview():
         except (OSError, ValueError):
             indexed = None
     out["elevation"] = {"files": len(tifs), "size": sum(os.path.getsize(t) for t in tifs), "indexed": indexed}
+    out["backups"] = len(backups.list_points(os.path.join(DATA, "backups"), with_size=False))
     du = shutil.disk_usage(DATA)
     out["disk"] = {"free": du.free, "total": du.total}
     return out
@@ -447,8 +589,21 @@ def raster_info(path):
     if os.path.isdir(path):
         zooms = sorted(int(d) for d in os.listdir(path) if d.isdigit() and os.path.isdir(os.path.join(path, d)))
         if zooms:
-            return {"kind": "tiles", "summary": f"tile folder, zoom {zooms[0]}-{zooms[-1]}", "use": ["mbtiles"]}
-        return {"kind": "folder", "summary": "folder (no {z}/{x}/{y} tiles found)", "use": []}
+            tms = os.path.exists(os.path.join(path, "tilemapresource.xml"))
+            info = {"kind": "tiles", "use": ["mbtiles", "add-mbtiles"], "zooms": [zooms[0], zooms[-1]], "tileish": True,
+                    "rows": "tms" if tms else "xyz",
+                    "summary": f"tile folder, zoom {zooms[0]}-{zooms[-1]}"
+                               + (", TMS rows (gdal2tiles)" if tms else "")}
+            b = folder_bounds(path, zooms[-1], tms)
+            if b:
+                info["bounds"] = b
+            return info
+        inside = sorted(n for n in os.listdir(path) if n.lower().endswith(tilesource.SQLITE_EXTS))
+        return {"kind": "folder", "use": [], "tileish": not inside,  # its tile files are listed on their own
+                "summary": f"folder with {', '.join(inside)} in it (listed separately below)" if inside
+                else "folder without {z}/{x}/{y} tiles (no zoom-level folders 0/, 1/, ... in it)"}
+    if os.path.isfile(path) and (path.lower().endswith(tilesource.SQLITE_EXTS) or tilesource.is_sqlite(path)):
+        return mbtiles_source_info(path)
     from osgeo import gdal, osr
     gdal.UseExceptions()
     try:
@@ -474,10 +629,10 @@ def raster_info(path):
     except Exception:  # noqa: BLE001
         pass
     if dtype == "Byte" and (ds.RasterCount in (3, 4) or b1.GetColorTable() is not None or ds.RasterCount == 1):
-        info.update(kind="imagery", use=["mbtiles"])
+        info.update(kind="imagery", use=["mbtiles", "add-mbtiles"])
         info["summary"] = f"{ds.RasterCount}-band 8-bit image: use it for map tiles"
     elif ds.RasterCount == 1:
-        info.update(kind="dem", use=["terrain", "elevation", "check-terrain"])
+        info.update(kind="dem", use=["terrain", "elevation", "check-terrain", "add-terrain", "add-elevation"])
         info["summary"] = f"1-band {dtype} raster: an elevation model, use it for terrain and elevation"
     else:
         info.update(kind="unknown", use=[])
@@ -486,6 +641,103 @@ def raster_info(path):
         info["use"] = []
         info["summary"] += " (has no coordinate system, can't be used)"
     return info
+
+
+_SOURCE_INFO = {}
+
+
+def mbtiles_source_info(path):
+    """A tile file (.mbtiles, .sqlitedb, ...) as the new area of add-mbtiles: zooms, area and row order,
+    as add-mbtiles reads it; or why it can't be used."""
+    st = os.stat(path)
+    key = (path, st.st_size, st.st_mtime)
+    if key not in _SOURCE_INFO:
+        r = tilesource.summary(path)
+        if "error" in r:
+            info = {"kind": "mbtiles", "use": [], "tileish": True, "summary": r["error"], "damaged": r.get("damaged")}
+        else:
+            fmt = (r.get("format") or "").upper()
+            info = {"kind": "mbtiles", "use": ["add-mbtiles"], "tileish": True, "zooms": r["zooms"],
+                    "bounds": r["bounds"], "rows": r["scheme"], "layout": r["layout"],
+                    "summary": f"{r['label']}, zoom {r['zooms'][0]}-{r['zooms'][1]}, {r['tiles']} tiles"
+                               + (f", {fmt}" if fmt else "")
+                               + ("" if r["scheme"] == ("tms" if r["layout"] == "mbtiles" else "xyz")
+                                  else f", {r['scheme'].upper()} rows ({r['reason']})")
+                               + ("" if r["indexed"] else ", no index (slow to read)")
+                               + ": add it to an existing tile set"}
+        if len(_SOURCE_INFO) > 200:
+            _SOURCE_INFO.clear()
+        _SOURCE_INFO[key] = info
+    return dict(_SOURCE_INFO[key])
+
+
+_FOLDER_BOUNDS = {}
+
+
+def folder_bounds(path, z, tms=False):
+    """lon/lat box of a {z}/{x}/{y} folder from its deepest level, cached by mtime."""
+    zdir = os.path.join(path, str(z))
+    try:
+        key = (zdir, os.path.getmtime(zdir), tms)
+    except OSError:
+        return None
+    if key in _FOLDER_BOUNDS:
+        return _FOLDER_BOUNDS[key]
+    xs, ys = [], []
+    for xe in os.scandir(zdir):
+        if xe.name.isdigit() and xe.is_dir():
+            col = [int(n.split(".", 1)[0]) for n in os.listdir(xe.path) if n.split(".", 1)[0].isdigit()]
+            if col:
+                xs.append(int(xe.name))
+                ys += [min(col), max(col)]
+    if not xs:
+        return None
+    if tms:
+        ys = [(1 << z) - 1 - y for y in ys]
+    from .mbtiles import tile_lonlat
+    w, n = tile_lonlat(z, min(xs), min(ys))
+    e, s = tile_lonlat(z, max(xs) + 1, max(ys) + 1)
+    _FOLDER_BOUNDS[key] = [round(w, 5), round(s, 5), round(e, 5), round(n, 5)]
+    return _FOLDER_BOUNDS[key]
+
+
+_PIECE_BOUNDS = {}
+
+
+def coverage():
+    """What exists now, for the Add area map: tile sets, terrain area, elevation pieces (from the files)."""
+    out = elevation_coverage()
+    pieces = []
+    from osgeo import gdal
+    gdal.UseExceptions()
+    for path in sorted(glob.glob(os.path.join(DATA, "elevation", "*.tif"))):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        key = (path, st.st_mtime, st.st_size)
+        b = _PIECE_BOUNDS.get(key)
+        if b is None:
+            try:
+                ds = gdal.Open(path)
+                gt = ds.GetGeoTransform()
+                w, n = gt[0], gt[3]
+                b = [w, n + ds.RasterYSize * gt[5], w + ds.RasterXSize * gt[1], n]
+                ds = None
+            except RuntimeError:
+                continue
+            _PIECE_BOUNDS[key] = b
+        pieces.append({"name": os.path.basename(path), "bounds": b})
+    out["pieces"] = pieces
+    layer = os.path.join(DATA, "terrain", "layer.json")
+    if out.get("terrain") and os.path.exists(layer):
+        try:
+            with open(layer) as f:
+                lj = json.load(f)
+            out["terrain"]["levels"] = len(lj.get("available", []))
+        except (OSError, ValueError):
+            pass
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -714,6 +966,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send(200, quick_status())
         if path == "/api/elevation/coverage":
             return self._send(200, elevation_coverage())
+        if path == "/api/coverage":
+            return self._send(200, coverage())
+        if path == "/api/backups":
+            points = backups.list_points(BACKUPS)
+            for m in points:
+                m.pop("dir", None)
+            return self._send(200, points)
         if path == "/api/elevation/points":
             return self._send(200, elevation_points(q.get("points", [""])[0]))
         if path == "/api/elevation/grid":
@@ -722,6 +981,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/elevation/carpet":
             return self._send(200, elevation_carpet(q.get("points", [""])[0]))
         if path == "/api/src/info":
+            if q.get("tileset"):
+                return self._send(200, mbtiles_source_info(tileset_path(q["tileset"][0])))
             return self._send(200, raster_info(src_path(q.get("path", [""])[0])))
         if path == "/api/jobs":
             return self._send(200, [j.as_dict() for j in reversed(RUNNER.jobs.values())])
@@ -764,6 +1025,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if m:
             restart_service(m.group(1))
             return self._send(200, {"restarted": m.group(1)})
+        m = re.match(r"^/api/backups/([A-Za-z0-9_-]+)/restore$", path)
+        if m:
+            job = RUNNER.submit(build_job("restore", {"id": m.group(1)}))
+            return self._send(200, job.as_dict(since=0))
         raise ApiError("not found", 404)
 
     def _put(self):
@@ -799,6 +1064,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _delete(self):
         path, q = self._route()
+        m = re.match(r"^/api/backups/([A-Za-z0-9_-]+)$", path)
+        if m:
+            if any(j.kind == "restore" and j.status in ("queued", "running") for j in RUNNER.jobs.values()):
+                raise ApiError("a restore is running; try again when it is done", 409)
+            try:
+                backups.delete(BACKUPS, m.group(1), log=lambda *_: None)
+            except FileNotFoundError:
+                raise ApiError("no such restore point", 404)
+            except (OSError, ValueError) as e:
+                raise ApiError(str(e))
+            return self._send(200, {"deleted": m.group(1)})
         if path != "/api/src":
             raise ApiError("not found", 404)
         target = src_path(q.get("path", [""])[0])

@@ -11,12 +11,12 @@ The `tools` service is always on and publishes port 80 (`GCS_HTTP_PORT` in `.env
 | Page | What it does |
 |------|--------------|
 | `/` front page | Buttons for every app, each showing whether its server answers. |
-| `/tools` data tools | Diagram of the stack with live status; **Build data** runs the converters below and streams their log (cancel, recent jobs, the matching `./gcs-tools` command); **Files** uploads to `data/src`, unpacks tile zips, and says what each raster is good for; **Health** is the full check (`check` below) with server logs and restart buttons. |
+| `/tools` data tools | Diagram of the stack with live status; **Build data** runs the converters below and streams their log (cancel, recent jobs, the matching `./gcs-tools` command); **Add area** merges a new region into the existing tiles, terrain and elevation pieces, with a map of both areas, a dry run and restore points (see [Adding an area](#adding-an-area)); **Files** uploads to `data/src`, unpacks tile zips, and says what each raster is good for; **Health** is the full check (`check` below) with server logs and restart buttons. |
 | `/elevation` | Elevation viewer: your imagery as the map, outlines of the elevation pieces and the terrain area, click for a height, draw a line for its profile, or shade an area by height. |
 | `/log-splitter` | The DataFlash log splitter (`static/apps/log-splitter.html`): works on the file in your browser, nothing is uploaded. |
 
 Jobs run one at a time, as the owner of the `data` folder (so files aren't
-root-owned). Links like `/tools#build=terrain`, `/tools#files` and
+root-owned). Links like `/tools#build=terrain`, `/tools#add`, `/tools#files` and
 `/tools#health` open a tab directly. The page reaches the servers by their
 compose names (`mbtiles`, `terrain`, ...). The Docker socket, if mounted, adds
 container status, logs and restarts.
@@ -28,6 +28,12 @@ container status, logs and restarts.
 | `mbtiles`       | imagery raster(s), or a `{z}/{x}/{y}` tile folder | `data/mbtiles/<name>.mbtiles` | mbtileserver :8000 |
 | `terrain`       | DEM raster(s), any size, any CRS        | `data/terrain/layer.json` + `{z}/{x}/{y}.terrain` | nginx :8011 |
 | `elevation`     | DEM raster(s)                           | `data/elevation/<name>_<x>_<y>.tif` | open-elevation :8082 |
+| `add-mbtiles`   | tile folder, .mbtiles or imagery raster(s) | adds to an existing `.mbtiles` | mbtileserver :8000 |
+| `add-terrain`   | DEM raster(s) of a new area             | adds to `data/terrain`          | nginx :8011       |
+| `add-elevation` | DEM raster(s) of a new area             | adds pieces to `data/elevation` | open-elevation :8082 |
+| `backups`       | restore points in `data/backups`        | list / restore / delete         |                   |
+| `inspect`       | a tile file or tile folder              | step-by-step report: can it be added, and if not why | |
+| `repair`        | a damaged tile file                     | `<name>-repaired.mbtiles` with every readable tile | |
 | `check-terrain` | a terrain folder (+ optionally the DEM) | report                          |                   |
 | `check`         | the running stack                       | report (exit code 1 on failure) |                   |
 | `serve`         |                                         | the web pages above             |                   |
@@ -55,7 +61,7 @@ docker compose run --rm tools terrain /data/src/dem.tif /data/terrain
 **Offline machine:** build the image where there is internet, then move it:
 
 ```bash
-docker save offline-gcs-tools:1.1.0 | gzip > gcs-tools-image.tar.gz   # connected machine
+docker save offline-gcs-tools:1.2.0 | gzip > gcs-tools-image.tar.gz   # connected machine
 docker load < gcs-tools-image.tar.gz                                   # offline machine
 ```
 
@@ -161,6 +167,124 @@ submodule), with these additions:
 - pieces of about 2000 x 2000 px by default (`--piece-size`, or `--tiles X Y`)
 - deletes the stale `summary.json` so the server re-indexes on restart
 
+## Adding an area
+
+The build commands above *replace* their output. To put a second region next to (or
+partly over) the first one without rebuilding it, and without the first one's source
+files, use the `add-*` commands, or the **Add area** tab on the tools page, which runs
+them for you (map tiles, then terrain, then elevation) and shows both areas on a map.
+
+```bash
+./gcs-tools add-mbtiles   data/src/NorthXYZ     data/mbtiles/custom.mbtiles   # a z/x/y folder
+./gcs-tools add-mbtiles   data/src/north.mbtiles data/mbtiles/custom.mbtiles  # or an .mbtiles
+./gcs-tools add-terrain   data/src/northBig.tif data/terrain
+./gcs-tools add-elevation data/src/northBig.tif           # then: docker compose restart elevation
+./gcs-tools backups                                        # restore points; backups restore <id> undoes one
+```
+
+Each takes `--dry-run` (report only) and `--prefer existing|new`, the rule for the overlap:
+
+| | `--prefer existing` (default) | `--prefer new` |
+|---|---|---|
+| **Map tiles** | Old pixels stay on top; the new tile shows only through their transparent parts. Opaque (JPEG) old tiles are kept as they are. | New pixels on top; old ones show through the new tiles' transparent parts. |
+| **Terrain** | Old heights win; the new DEM fills only where the old one had none. | The new DEM wins wherever it has data. |
+| **Elevation** | New pieces only where no piece exists. No-data holes of old pieces under the new DEM are filled (`--no-fill-holes` to skip); valid heights never change. | Old pieces under the new DEM are removed, or cropped (pixel copies) where they stick out of it; old heights are copied into the new DEM's no-data holes. |
+
+What happens in each case:
+
+- **The new imagery** can be a `{z}/{x}/{y}` folder, a tile file, an imagery GeoTIFF, or (on
+  the page) another tile set already in `data/mbtiles`. Tile files are recognised by their
+  tables, whatever the extension: MBTiles (also deduplicated), RMaps/OsmAnd `.sqlitedb`
+  (what SAS.Planet exports as "SQLite3", zoom stored as 17 - zoom) and OruxMaps. A tile file
+  one folder down in `data/src` is listed too. All of them are read the same way and give
+  the same result:
+  - *Row order* (`--scheme auto|xyz|tms`, **Tile rows** on the page). `auto`: a folder is
+    XYZ (Google, OSM, SAS.Planet) unless it holds gdal2tiles' `tilemapresource.xml` (TMS);
+    an `.mbtiles` is TMS, as the standard says, unless its metadata has `scheme=xyz` or its
+    `bounds` only match its tiles read top-down (some exporters write XYZ rows). The run
+    prints which order it used, and warns when the other order would put the area over the
+    existing one. On the page the outline on the map moves when you change it.
+  - 512 px tiles are scaled to the file's tile size (256 px) instead of being mixed in.
+  - Deduplicated `.mbtiles` (`map` + `images` tables) work as they are.
+  - Vector `.mbtiles` (`format=pbf`) are refused: the log viewer needs images.
+- **add-mbtiles** copies the file to `data/.work`, adds the tiles it doesn't have, and
+  combines tiles both have (alpha compositing; PNG output whenever a PNG went in, so old
+  pixels come out exactly as they were). If the new tiles start at a deeper zoom than the
+  file (a tile folder with zoom 12-17, say), the zoomed-out levels are built for the new
+  area and merged too (`--no-lower-zooms` to skip). The copy is checked
+  (`PRAGMA quick_check`) and swapped in with one rename; mbtileserver reloads it by itself.
+  A raster source is cut into tiles first, exactly as `mbtiles` does.
+- **add-terrain** remakes only the tiles that touch the new DEM (and, deeper than the new
+  DEM's last level, only the old tiles it reaches into). The other tiles stay byte-for-byte
+  as they are. Those border and zoomed-out tiles need the *old* heights too: they come from
+  the elevation pieces (cut from the same old DEM, so they are the old DEM), and where no
+  piece covers a spot of the old terrain area, from decoding the old terrain tiles
+  (accurate to their mesh error). Pieces that `add-elevation` added are ignored, so the
+  order of the two commands doesn't matter. An existing tile whose heights would not change
+  is not rewritten. `layer.json` lists both areas and gets a new `version`, so browsers fetch
+  the changed tiles.
+- **add-elevation** keeps pieces from overlapping. open-elevation answers a point from the
+  first piece whose box contains it, in folder-listing order, so overlapping pieces would
+  give answers from either file at random. Areas are cut in whole pixels; a piece may reach
+  less than a pixel into its neighbour but never leaves a gap.
+
+**Restore points.** Every change first writes `data/backups/<id>/manifest.json` (what it is
+about to add, replace or remove) and keeps the previous version of every replaced file
+there, by hard link where possible, so a restore point of a big `.mbtiles` costs no extra
+space until the file is replaced. `./gcs-tools backups restore <id>` (or **Restore** on the
+page) puts the old files back exactly and removes the added ones; changes to the same data
+are undone newest first. `backups delete <id>` drops a restore point and frees its space.
+Nothing in `data/backups` or `data/.work` is served.
+
+Disk space: `add-mbtiles` needs room for a copy of the file plus the new tiles; the others
+need about the size of what they write. Each run checks first.
+
+**Elevation server.** A patch to the `open-elevation` submodule (branch `expandable-regions`)
+makes it pick among overlapping pieces deterministically (finest resolution first, falling
+through to the next piece on no-data) and answer 0 outside every piece. Before, a point
+outside all pieces read a pixel through a wrapped-around array index and came back with a
+height from somewhere else. The `add-*` tools don't need the patch, but it is worth having.
+
+## inspect: why can't a tile file be used?
+
+```bash
+./gcs-tools inspect data/src/north.mbtiles --target data/mbtiles/custom.mbtiles
+./gcs-tools inspect data/src/north.mbtiles --deep        # also reads the whole file for damage
+```
+
+On the page: **Check** next to the file on the Files tab, or **Check it** under the Imagery
+list on the Add area tab (files that can't be used are listed there with the reason). It
+goes through the file step by step (SQLite header, layout, index, metadata, tiles per zoom,
+image types, tile size, row order, where the area lies) and ends with `RESULT: usable` or
+`RESULT: not usable: <why and what to do>`. Typical reasons: a half-copied file (copy it
+again), an HTML page saved as .mbtiles (a failed download), vector tiles, an SQLite file
+with tables this tool doesn't know.
+
+## repair: save the tiles of a damaged file
+
+A file that reports `database disk image is malformed` is damaged. `inspect` says which of
+two things happened, because an SQLite file records its own size in its header:
+
+- **cut short** (`X of the Y its header says it has`): the copy or download did not finish.
+  Copy it again and compare the size.
+- **full size**: it was copied while the program that made it was still writing, or the
+  export or the disk is bad. Close that program, copy it again, compare a checksum
+  (`sha256sum` on Linux, `certutil -hashfile <file> SHA256` on Windows).
+
+If a good copy can't be had:
+
+```bash
+./gcs-tools repair data/src/north.mbtiles        # -> data/src/north-repaired.mbtiles
+```
+
+On the page: **Make a repaired copy** in the Check dialog, or next to the file under the
+Imagery list. The original is only read. The tiles are read straight from the table, not
+through the index (a damaged index is the most common case, and then every tile is saved);
+around damaged pages the rows are read in smaller and smaller batches, so only rows that
+really can't be read are lost. The copy is plain MBTiles (RMaps/OsmAnd/OruxMaps files come
+out as MBTiles too), checked with `PRAGMA quick_check`, and listed under Imagery straight
+away. About 6 s per GB on an SSD.
+
 ## check: is everything working?
 
 ```bash
@@ -189,7 +313,15 @@ python3 -m gcs_tools check --host localhost   # without Docker, through the publ
 
   ```bash
   docker compose run --rm --entrypoint bash tools /opt/gcs-tools/tests/smoke_test.sh
+  docker compose run --rm --entrypoint bash tools /opt/gcs-tools/tests/add_area_test.sh
   ```
+
+  `add_area_test.sh` builds an old area, deletes its sources, adds an overlapping new one
+  (40 m higher, so every height read back tells which DEM it came from) with both
+  `--prefer` rules, checks what is served, and checks every restore gives back the exact
+  files. It also adds the same imagery as `.mbtiles` in the layouts other tools write
+  (standard, XYZ rows, deduplicated, 512 px, a gdal2tiles TMS folder) and checks each gives
+  the same file as the folder, and that a vector `.mbtiles` is refused.
 
 Without Docker: install GDAL's Python bindings and `pip install pydelatin==0.4.0`,
 then run `PYTHONPATH=tools python3 -m gcs_tools <command> ...`.

@@ -75,6 +75,7 @@
       const e = data.elevation;
       put('elevation', e && e.files ? `Now: ${plural(e.files, 'piece', 'pieces')}, ${size(e.size)}` : 'Now: no pieces yet');
       put('src', `${plural(data.src.length, 'file', 'files')} in data/src, ${size(data.disk.free)} free`);
+      put('backups', data.backups ? `Now: ${plural(data.backups, 'restore point', 'restore points')}` : 'Now: no areas added yet');
     }
   }
 
