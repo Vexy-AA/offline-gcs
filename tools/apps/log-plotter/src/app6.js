@@ -107,7 +107,7 @@ const V3 = {
     this.readColors();
     const keys = {
       frame: [ix && ix.name, ix && ix.size, ix && ix.tMin, c.surface, c.vehicle, (c.pos || []).filter(p => p.on).map(p => p.src).join()].join('|'),
-      paths: JSON.stringify([c.pos, c.amsl, c.zoff, c.range, c.colorBy, c.curtain, c.waypoints, c.vehicle, c.range === 'view' ? [Math.round(st.view.t0), Math.round(st.view.t1)] : 0, c.terrain && c.stretchPaths ? c.exag : 1]),
+      paths: JSON.stringify([c.pos, c.dropJumps, c.amsl, c.zoff, c.range, c.colorBy, c.curtain, c.waypoints, c.vehicle, c.range === 'view' ? [Math.round(st.view.t0), Math.round(st.view.t1)] : 0, c.terrain && c.stretchPaths ? c.exag : 1]),
       tiles: JSON.stringify([c.imagery, c.imageryUrl, c.imageryMax, c.terrain, c.terrainUrl, c.terrainMsl, c.terrain ? c.exag : 1, c.terrain && c.exag !== 1 ? c.amsl : 0]),
       water: JSON.stringify([c.water, c.waterLevel, c.waterDepth, c.surface, c.terrain && c.stretchWater ? [c.exag, c.amsl] : 1]),
       model: JSON.stringify([c.model, c.modelName])
@@ -124,7 +124,7 @@ const V3 = {
     if (force || keys.tiles !== this.cfgKey.tiles) { this.cfgKey.tiles = keys.tiles; this.buildTiles(); }
     if (force || keys.water !== this.cfgKey.water) this.buildWater(); else this.updateWaterLook();
     this.cfgKey.frame = keys.frame; this.cfgKey.paths = keys.paths; this.cfgKey.model = keys.model; this.cfgKey.water = keys.water;
-    this.posD = posData(c.vehicle); this.attD = attData(c.att);
+    this.posD = posData(c.vehicle, c.dropJumps); this.attD = attData(c.att);
     this.applyFix();
     this.req();
   },
@@ -144,23 +144,27 @@ const V3 = {
 
   buildFrame() {
     const c = this.cfg, ix = st.ix;
-    const d = posData(c.vehicle) || posData(c.pos.find(p => p.on) ? c.pos.find(p => p.on).src : '');
+    // takeoff and the map area always ignore position jumps, so one bad fix cannot spread the map over a continent
+    const on = c.pos.filter(p => p.on).map(p => p.src);
+    const d = posData(c.vehicle, true) || posData(on[0], true);
     this.fr = null;
     if (!d) return;
     let k = -1;
     const tArm = ix.armed.length ? ix.armed[0].t0 : -Infinity;
-    for (let i = EX.lowerBound(d.t, tArm); i < d.t.length; i++) if (validLL(d.lat[i], d.lon[i])) { k = i; break; }
-    if (k < 0) for (let i = 0; i < d.t.length; i++) if (validLL(d.lat[i], d.lon[i])) { k = i; break; }
+    for (let i = EX.lowerBound(d.t, tArm); i < d.t.length; i++) if (goodFix(d, i)) { k = i; break; }
+    if (k < 0) for (let i = 0; i < d.t.length; i++) if (goodFix(d, i)) { k = i; break; }
     if (k < 0) return;
     this.home = { lat: d.lat[k], lon: d.lon[k], alt: d.alt ? d.alt[k] : 0 };
     this.fr = GEO.frame(this.home.lat, this.home.lon, c.surface === 'sphere');
-    let far = 0;
-    for (const p of c.pos) {
-      const pd = posData(p.src); if (!pd) continue;
-      const m = GEO.mPerDeg(this.home.lat);
-      const step = Math.max(1, Math.floor(pd.t.length / 3000));
-      for (let i = 0; i < pd.t.length; i += step) if (validLL(pd.lat[i], pd.lon[i])) far = Math.max(far, Math.hypot((pd.lat[i] - this.home.lat) * m.lat, (pd.lon[i] - this.home.lon) * m.lon));
+    // the map covers the shown paths: 99.5% of their fixes, so a few stray ones do not count
+    const m = GEO.mPerDeg(this.home.lat), dist = [];
+    for (const src of on.length ? on : [c.vehicle]) {
+      const pd = posData(src, true); if (!pd) continue;
+      const step = Math.max(1, Math.floor(pd.t.length / 4000));
+      for (let i = 0; i < pd.t.length; i += step) if (goodFix(pd, i)) dist.push(Math.hypot((pd.lat[i] - this.home.lat) * m.lat, (pd.lon[i] - this.home.lon) * m.lon));
     }
+    dist.sort((a, b) => a - b);
+    const far = dist.length ? dist[Math.floor((dist.length - 1) * 0.995)] : 0;
     this.roi = { lat: this.home.lat, lon: this.home.lon, r: clamp(far * 1.6 + 1500, 2500, 250000) };
     if (this.fogSky) { this.fogSky.near = this.roi.r * 0.9; this.fogSky.far = this.roi.r * 2.4; }
   },
@@ -172,14 +176,15 @@ const V3 = {
   buildPaths() {
     const c = this.cfg, ix = st.ix, fr = this.fr;
     for (const o of [...this.pathGroup.children]) { this.pathGroup.remove(o); o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material) x.material.dispose(); }); }
-    this.pick = [];
+    this.pick = []; this.jumps = {};
     const t0 = c.range === 'view' ? st.view.t0 : -Infinity, t1 = c.range === 'view' ? st.view.t1 : Infinity;
     const mcol = c.colorBy === 'mode' ? this.modeColors() : null;
     const spans = ix.modeSpans;
     const col = new THREE.Color();
     for (const p of c.pos) {
       if (!p.on) continue;
-      const d = posData(p.src); if (!d) continue;
+      const d = posData(p.src, c.dropJumps); if (!d) continue;
+      this.jumps[p.src] = jumpCount(d);
       const i0 = EX.lowerBound(d.t, t0), i1 = EX.upperBound(d.t, t1), n = i1 - i0;
       if (n < 2) continue;
       const step = Math.max(1, Math.ceil(n / 40000));
@@ -191,7 +196,7 @@ const V3 = {
       const base = new THREE.Color(st.colors['c' + ((p.color % NC) + 1)]);
       const tmp = [0, 0, 0];
       for (let i = i0; i < i1; i += step) {
-        if (!validLL(d.lat[i], d.lon[i])) { prev = -1; continue; }
+        if (!goodFix(d, i)) { prev = -1; continue; }
         fr.toScene(d.lat[i], d.lon[i], this.pathH(d.lat[i], d.lon[i], d.alt ? d.alt[i] : this.home.alt, p.dz), tmp, 0);
         pts.push(tmp[0], tmp[1], tmp[2]); times.push(d.t[i]);
         const k = pts.length / 3 - 1;
@@ -214,6 +219,13 @@ const V3 = {
       if (c.curtain && p.src === c.vehicle) this.pathGroup.add(this.curtain(pts, base));
     }
     if (c.waypoints) { const w = this.missionObj(); if (w) this.pathGroup.add(w); }
+    this.showJumps();
+  },
+  showJumps() {
+    const el = this.g && this.g._el.body && this.g._el.body.querySelector('.v3-jumps'); if (!el) return;
+    const c = this.cfg, list = Object.entries(this.jumps || {}).filter(([, n]) => n > 0);
+    el.textContent = !c.dropJumps ? '' : list.length ? 'Jumps hidden: ' + list.map(([s, n]) => `${s} ${n} fix${n === 1 ? '' : 'es'}`).join(', ') + '.' : '';
+    el.hidden = !el.textContent;
   },
   curtain(pts, color) {
     const n = pts.length / 3, gh = [0, 0, 0];
@@ -582,7 +594,7 @@ const V3 = {
   },
   /** Height offset for path src that matches the vehicle path over the first seconds after takeoff. */
   matchOffset(src) {
-    const c = this.cfg, a = posData(c.vehicle), b = posData(src); if (!a || !b || !a.alt || !b.alt) return null;
+    const c = this.cfg, a = posData(c.vehicle, c.dropJumps), b = posData(src, c.dropJumps); if (!a || !b || !a.alt || !b.alt) return null;
     const ix = st.ix, t0 = ix.armed.length ? ix.armed[0].t0 : Math.max(a.t[0], b.t[0]);
     const diffs = [];
     for (let k = 0; k < 20; k++) { const t = t0 + 1e6 + k * 0.5e6, P = posAt(a, t), Q = posAt(b, t); if (P && Q) diffs.push(P.alt - Q.alt); }
@@ -802,6 +814,8 @@ function fill3dSettings(g) {
   P.append(list);
   row(P, 'Show', select('range', [['all', 'Whole log'], ['view', 'Time range shown in the graphs']]));
   row(P, 'Colour', select('colorBy', [['source', 'One colour per source'], ['mode', 'By flight mode']]));
+  P.append(check('dropJumps', 'Hide position jumps (faster than 600 m/s)'));
+  const jl = h('div', 'v3-sub v3-jumps'); jl.hidden = true; P.append(jl);
   P.append(check('curtain', 'Curtain down to takeoff height'), check('waypoints', 'Mission waypoints (CMD)'));
 
   // vehicle

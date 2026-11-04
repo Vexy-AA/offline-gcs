@@ -4522,6 +4522,7 @@ function buildHelp() {
     <span>Model</span><span>A built-in plane or quadcopter, or your own .glb, .gltf (with everything embedded), .obj or .stl file. Your file is kept in this browser. Use Turn if its nose does not point forward, and Size for its real length in metres.</span>
     <span>Map</span><span>Satellite imagery, OpenStreetMap, OpenTopoMap, CARTO, or any XYZ server: a link with {z}, {x} and {y}, plus {-y} for TMS rows, {s} for a/b/c servers and {q} for a Bing quadkey.</span>
     <span>Terrain</span><span>A quantized-mesh terrain server: give the link to its layer.json. Gzipped tiles and vertex normals are supported, in EPSG:4326 with TMS or XYZ rows. Tick “above sea level” if the heights in the tiles are not ellipsoidal.</span>
+    <span>Position jumps</span><span>A GPS glitch can put a single fix hundreds of kilometres away. Fixes that would need more than 600 m/s to reach are hidden from the paths and the vehicle (untick Hide position jumps to see them). The map area and takeoff point always ignore them, and only use the paths that are shown.</span>
     <span>Path offsets</span><span>Each path has its own height offset in metres, for example to line GPS altitude up with POS. The ≡ button sets it to match the vehicle path just after takeoff.</span>
     <span>Water</span><span>A see-through layer whose surface is at sea level plus the height you set, reaching down by the depth you choose (10 m to start). Pick its colour, how see-through it is from above and from inside, and whether the surface shows moving white waves. When the camera is inside it, the view takes on the water colour.</span>
     <span>Stretch</span><span>With terrain on, Stretch heights multiplies terrain height differences around the takeoff height, so hills look taller. Tick Paths and vehicle, or Water, to stretch them the same way.</span>
@@ -4936,7 +4937,7 @@ $('detailSel').addEventListener('change', () => {
 /* ================= 3D view: sources, models, map tiles, terrain ================= */
 const HAS3D = typeof THREE !== 'undefined' && !!THREE.LineSegments2;
 const V3DEF = {
-  pos: [], vehicle: '', att: '', model: 'plane', modelName: '', modelSize: 2.5, keepVisible: true, rot: [0, 0, 0],
+  pos: [], vehicle: '', att: '', dropJumps: true, model: 'plane', modelName: '', modelSize: 2.5, keepVisible: true, rot: [0, 0, 0],
   imagery: 'esri', imageryUrl: '', imageryMax: 19, imageryAttr: '',
   terrain: false, terrainUrl: '', terrainMsl: false, exag: 1, stretchPaths: false, stretchWater: false,
   water: false, waterLevel: 0, waterDepth: 10, waterColor: '#14a3a3', waterAbove: 30, waterUnder: 45, waves: true, wavesMove: true,
@@ -4996,13 +4997,54 @@ function v3Sources() {
   att.sort((a, b) => arank(a) - arank(b) || (a.id < b.id ? -1 : 1));
   return { pos, att };
 }
-function posData(src) {
+/** Positions of a source. With dropJumps, fixes that jump faster than JUMP_SPEED are marked bad in d.ok. */
+function posData(src, dropJumps) {
   const ix = st.ix; if (!ix || !src) return null;
   const f = k => ix.fieldIndex.get(src + '.' + k);
   const la = f('Lat'), lo = f('Lng'), al = f('Alt');
   if (!la || !lo) return null;
-  return { t: la.series.t, lat: la.series.v, lon: lo.series.v, alt: al ? al.series.v : null };
+  const d = { t: la.series.t, lat: la.series.v, lon: lo.series.v, alt: al ? al.series.v : null, ok: null };
+  if (dropJumps) d.ok = jumpMask(d);
+  return d;
 }
+/* ---------- position jumps: a GPS glitch can put one fix hundreds of kilometres away ---------- */
+const JUMP_SPEED = 600;
+const MASKS = new WeakMap();
+function jumpMask(d) {
+  let m = MASKS.get(d.lat);
+  if (m) return m;
+  const n = d.t.length, ok = new Uint8Array(n), T = d.t, LA = d.lat, LO = d.lon;
+  const dist = (i, j) => Math.hypot((LA[i] - LA[j]) * 111195, (LO[i] - LO[j]) * 111195 * Math.cos(LA[i] * GEO.D2R));
+  const fits = (i, j) => dist(i, j) <= JUMP_SPEED * Math.max(0.2, Math.abs(T[i] - T[j]) / 1e6) + 30;
+  // split the track wherever it jumps; each piece is a run of fixes that agree with each other
+  const idx = [];
+  for (let i = 0; i < n; i++) if (validLL(LA[i], LO[i])) idx.push(i);
+  if (!idx.length) { MASKS.set(d.lat, ok); return ok; }
+  const segs = [];
+  let s0 = 0;
+  for (let k = 1; k < idx.length; k++) if (!fits(idx[k], idx[k - 1])) { segs.push([s0, k - 1]); s0 = k; }
+  segs.push([s0, idx.length - 1]);
+  // keep the largest piece, then every piece that joins up with what is kept (or is large in its own right)
+  let main = 0;
+  for (let k = 1; k < segs.length; k++) if (segs[k][1] - segs[k][0] > segs[main][1] - segs[main][0]) main = k;
+  const big = Math.max(50, 0.1 * (segs[main][1] - segs[main][0] + 1));
+  const keep = sg => { for (let k = sg[0]; k <= sg[1]; k++) ok[idx[k]] = 1; };
+  keep(segs[main]);
+  let last = idx[segs[main][1]];
+  for (let k = main + 1; k < segs.length; k++) {
+    const sg = segs[k];
+    if (fits(idx[sg[0]], last) || sg[1] - sg[0] + 1 >= big) { keep(sg); last = idx[sg[1]]; }
+  }
+  let first = idx[segs[main][0]];
+  for (let k = main - 1; k >= 0; k--) {
+    const sg = segs[k];
+    if (fits(idx[sg[1]], first) || sg[1] - sg[0] + 1 >= big) { keep(sg); first = idx[sg[0]]; }
+  }
+  MASKS.set(d.lat, ok);
+  return ok;
+}
+const goodFix = (d, i) => validLL(d.lat[i], d.lon[i]) && (!d.ok || d.ok[i] === 1);
+function jumpCount(d) { if (!d.ok) return 0; let n = 0; for (let i = 0; i < d.t.length; i++) if (validLL(d.lat[i], d.lon[i]) && !d.ok[i]) n++; return n; }
 function attData(id) {
   const ix = st.ix; if (!ix || !id) return null;
   const q = id.endsWith(':q'), src = q ? id.slice(0, -2) : id;
@@ -5016,13 +5058,18 @@ const validLL = (la, lo) => la === la && lo === lo && (la !== 0 || lo !== 0) && 
 function posAt(d, t) {
   if (!d) return null;
   const T = d.t, n = T.length; if (!n) return null;
-  let i = EX.lowerBound(T, t);
-  if (i >= n) i = n - 1;
-  let j = i > 0 ? i - 1 : i;
-  if (T[i] - T[j] > 5e6 || t <= T[j]) { const k = Math.abs(T[i] - t) < Math.abs(T[j] - t) ? i : j; return validLL(d.lat[k], d.lon[k]) ? { lat: d.lat[k], lon: d.lon[k], alt: d.alt ? d.alt[k] : 0, i: k } : null; }
-  if (!validLL(d.lat[i], d.lon[i]) || !validLL(d.lat[j], d.lon[j])) return null;
-  const f = Math.min(1, Math.max(0, (t - T[j]) / (T[i] - T[j] || 1)));
-  return { lat: d.lat[j] + (d.lat[i] - d.lat[j]) * f, lon: d.lon[j] + (d.lon[i] - d.lon[j]) * f, alt: d.alt ? d.alt[j] + (d.alt[i] - d.alt[j]) * f : 0, i };
+  const k = EX.lowerBound(T, t);
+  let a = k - 1, b = k;
+  while (a >= 0 && k - a < 400 && !goodFix(d, a)) a--;
+  while (b < n && b - k < 400 && !goodFix(d, b)) b++;
+  const A = a >= 0 && goodFix(d, a) ? a : -1, B = b < n && goodFix(d, b) ? b : -1;
+  const at = i => ({ lat: d.lat[i], lon: d.lon[i], alt: d.alt ? d.alt[i] : 0, i });
+  if (A >= 0 && B >= 0 && T[B] > T[A] && T[B] - T[A] <= 5e6) {
+    const f = Math.min(1, Math.max(0, (t - T[A]) / (T[B] - T[A])));
+    return { lat: d.lat[A] + (d.lat[B] - d.lat[A]) * f, lon: d.lon[A] + (d.lon[B] - d.lon[A]) * f, alt: d.alt ? d.alt[A] + (d.alt[B] - d.alt[A]) * f : 0, i: B };
+  }
+  const c = A < 0 ? B : B < 0 ? A : (t - T[A] <= T[B] - t ? A : B);
+  return c >= 0 && Math.abs(T[c] - t) <= 5e6 ? at(c) : null;
 }
 /** Roll, pitch, yaw in degrees at time t. Quaternions are ArduPilot NED-to-body (Q1 = w). */
 function attAt(d, t) {
@@ -5232,6 +5279,62 @@ async function loadLayer(url) {
     ext: Array.isArray(j.extensions) ? j.extensions : []
   };
 }
+/** A flat tile, for places the terrain server does not cover at all. */
+function flatQM() {
+  const N = 8, n = N + 1, u = new Float32Array(n * n), v = new Float32Array(n * n), idx = [];
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { u[j * n + i] = i / N * 32767; v[j * n + i] = j / N * 32767; }
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const a = j * n + i, b = a + 1, c = a + n, d = c + 1; idx.push(a, b, c, b, d, c); }
+  const col = (f) => Array.from({ length: n * n }, (_, k) => k).filter(f);
+  return { flat: true, minH: 0, maxH: 0, nV: n * n, u, v, hm: new Float64Array(n * n), idx: Uint32Array.from(idx), normals: null,
+    edges: [col(k => k % n === 0), col(k => k < n), col(k => k % n === N), col(k => k >= N * n)].map(a => Uint32Array.from(a)) };
+}
+/** One quarter of a terrain tile, clipped exactly, in the quarter's own 0…32767 coordinates. */
+function cropQM(qm, dx, dy) {
+  if (qm.flat) return flatQM();
+  const H = 32767 / 2, U0 = dx * H, V0 = dy * H, U1 = U0 + H, V1 = V0 + H;
+  const height = i => qm.hm ? qm.hm[i] : qm.minH + qm.h[i] / 32767 * (qm.maxH - qm.minH);
+  const vu = [], vv = [], vh = [], keys = new Map(), out = [];
+  const vert = (u, v, hh) => {
+    const ku = Math.min(32767, Math.max(0, (u - U0) / H * 32767)), kv = Math.min(32767, Math.max(0, (v - V0) / H * 32767));
+    const key = Math.round(ku * 4) * 200000 + Math.round(kv * 4);
+    let i = keys.get(key);
+    if (i === undefined) { i = vu.length; vu.push(ku); vv.push(kv); vh.push(hh); keys.set(key, i); }
+    return i;
+  };
+  const clip = (poly, inside, cut) => {
+    const res = [];
+    for (let k = 0; k < poly.length; k++) {
+      const a = poly[k], b = poly[(k + 1) % poly.length], ia = inside(a), ib = inside(b);
+      if (ia) res.push(a);
+      if (ia !== ib) res.push(cut(a, b));
+    }
+    return res;
+  };
+  const atU = (a, b, U) => { const f = (U - a[0]) / (b[0] - a[0]); return [U, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]; };
+  const atV = (a, b, V) => { const f = (V - a[1]) / (b[1] - a[1]); return [a[0] + (b[0] - a[0]) * f, V, a[2] + (b[2] - a[2]) * f]; };
+  const I = qm.idx;
+  for (let t = 0; t < I.length; t += 3) {
+    let poly = [0, 1, 2].map(k => { const i = I[t + k]; return [qm.u[i], qm.v[i], height(i)]; });
+    const minU = Math.min(poly[0][0], poly[1][0], poly[2][0]), maxU = Math.max(poly[0][0], poly[1][0], poly[2][0]);
+    const minV = Math.min(poly[0][1], poly[1][1], poly[2][1]), maxV = Math.max(poly[0][1], poly[1][1], poly[2][1]);
+    if (maxU <= U0 || minU >= U1 || maxV <= V0 || minV >= V1) continue;
+    poly = clip(poly, p => p[0] >= U0, (a, b) => atU(a, b, U0));
+    if (poly.length) poly = clip(poly, p => p[0] <= U1, (a, b) => atU(a, b, U1));
+    if (poly.length) poly = clip(poly, p => p[1] >= V0, (a, b) => atV(a, b, V0));
+    if (poly.length) poly = clip(poly, p => p[1] <= V1, (a, b) => atV(a, b, V1));
+    if (poly.length < 3) continue;
+    const ids = poly.map(p => vert(p[0], p[1], p[2]));
+    for (let k = 1; k + 1 < ids.length; k++) if (ids[0] !== ids[k] && ids[k] !== ids[k + 1] && ids[0] !== ids[k + 1]) out.push(ids[0], ids[k], ids[k + 1]);
+  }
+  const n = vu.length;
+  if (!n || !out.length) return flatQM();
+  let lo = Infinity, hi = -Infinity;
+  for (const x of vh) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  const u = Float32Array.from(vu), v = Float32Array.from(vv);
+  const side = f => { const a = []; for (let i = 0; i < n; i++) if (f(i)) a.push(i); return Uint32Array.from(a); };
+  return { minH: lo, maxH: hi, nV: n, u, v, hm: Float64Array.from(vh), idx: Uint32Array.from(out), normals: null,
+    edges: [side(i => u[i] < 0.5), side(i => v[i] < 0.5), side(i => u[i] > 32766.5), side(i => v[i] > 32766.5)] };
+}
 function terrainTileUrl(L, z, x, y) {
   const yy = L.scheme === 'tms' ? y : (1 << z) - 1 - y;
   const s = L.tpl.replace('{z}', z).replace('{x}', x).replace('{y}', yy).replace('{version}', encodeURIComponent(L.version));
@@ -5266,7 +5369,8 @@ class TileSet {
     this.layer = layer || null;
     this.terrain = !!layer;
     this.cfg = cfg;
-    this.maxZ = this.terrain ? layer.maxzoom : (this.imgTpl ? this.imgMax : 0);
+    // with imagery, terrain levels go past the server's last level (cut from it) so the map stays sharp
+    this.maxZ = this.terrain ? (this.imgTpl ? clamp(Math.max(layer.maxzoom, this.imgMax - 1), 0, 20) : layer.maxzoom) : (this.imgTpl ? this.imgMax : 0);
     this.roots = [];
     const E = this.E;
     if (!E.roi || (!this.terrain && !this.imgTpl)) return;
@@ -5368,7 +5472,10 @@ class TileSet {
         t.mesh = r.mesh; r.mesh.visible = false; this.group.add(r.mesh);
         if (!refresh) this.loaded++;
         if (!r.partial) this.good++;
-        t.state = 'ready'; t.partial = !!r.partial;
+        t.state = 'ready'; t.partial = !!r.partial; t.virtual = !!r.virtual; t.gone = r.status === 404;
+        if (r.qm) t.qm = r.qm;
+        // an image tile shown from its parent's image does not split further until its own image arrives
+        if (!this.terrain) t.noKids = t.virtual;
         if (r.partial) { t.tries++; t.retryAt = performance.now() + backoff(t.tries, r.status); t.err = r.err || ''; }
         else { t.tries = 0; t.err = ''; }
       }, e => {
@@ -5387,7 +5494,7 @@ class TileSet {
     this.E.req();
   }
   /** A tile the view needs right now that failed: a wanted tile with no data, or a shown tile missing imagery. */
-  missing(t, now) { return (t.state === 'failed' && now - t.want < 3000) || (t.partial && t.mesh && now - t.used < 1000); }
+  missing(t, now) { return (t.state === 'failed' && now - t.want < 3000) || (t.partial && !t.gone && t.mesh && now - t.used < 1000); }
   /** Tiles that are wanted on screen but failed, and when the next try is. */
   failures() {
     const now = performance.now();
@@ -5397,10 +5504,21 @@ class TileSet {
     }
     return { n, next: next === Infinity ? 0 : Math.max(0, next - now), err };
   }
+  parentOf(t) { return t.z > 0 ? this.cache.get((t.z - 1) + '/' + (t.x >> 1) + '/' + (t.y >> 1)) : null; }
   async loadImagery(t) {
     const url = xyzUrl(this.imgTpl, t.z, t.x, t.y);
     const img = await loadImage(url);
-    if (!img && !t.root) { const b = IMG_BAD.get(url) || {}; throw Object.assign(new Error(b.msg || 'Map tile failed'), { status: b.status }); }
+    let map = null, xf = { ox: 0, oy: 0, s: 1 }, shared = false;
+    if (img) { map = new THREE.Texture(img); map.anisotropy = this.E.aniso; map.needsUpdate = true; }
+    else if (!t.root) {
+      // show this quarter of the parent's image, so the other three quarters can still sharpen
+      const p = this.parentOf(t), pm = p && p.mesh && p.mesh.material.map;
+      if (!pm) { const b = IMG_BAD.get(url) || {}; throw Object.assign(new Error(b.msg || 'Map tile failed'), { status: b.status }); }
+      const dx = t.x & 1, dy = t.y & 1, px = p.xf || { ox: 0, oy: 0, s: 1 };
+      xf = { ox: px.ox + px.s * dx / 2, oy: px.oy + px.s * (1 - dy) / 2, s: px.s / 2 };
+      map = pm; shared = true;
+    }
+    t.xf = xf;
     const segs = t.z < 5 ? 24 : t.z < 9 ? 12 : 4, n = segs + 1;
     const pos = new Float32Array(n * n * 3), uv = new Float32Array(n * n * 2);
     for (let j = 0; j < n; j++) {
@@ -5408,7 +5526,7 @@ class TileSet {
       for (let i = 0; i < n; i++) {
         const lon = GEO.merc.lon(t.x + i / segs, t.z), k = j * n + i;
         this.E.fr.toScene(lat, lon, this.E.surfH(lat, lon), pos, k * 3);
-        uv[k * 2] = i / segs; uv[k * 2 + 1] = 1 - j / segs;
+        uv[k * 2] = xf.ox + xf.s * (i / segs); uv[k * 2 + 1] = xf.oy + xf.s * (1 - j / segs);
       }
     }
     const idx = new Uint16Array(segs * segs * 6);
@@ -5419,18 +5537,19 @@ class TileSet {
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
-    let m;
-    if (img) { const tex = new THREE.Texture(img); tex.anisotropy = this.E.aniso; tex.needsUpdate = true; m = new THREE.MeshBasicMaterial({ map: tex }); }
-    else m = new THREE.MeshBasicMaterial({ color: this.E.groundColor });
+    const m = map ? new THREE.MeshBasicMaterial({ map }) : new THREE.MeshBasicMaterial({ color: this.E.groundColor });
     const mesh = new THREE.Mesh(geo, m);
     mesh.renderOrder = t.z;
+    mesh.userData.sharedMap = shared;
     if (img) return { mesh };
     const b = IMG_BAD.get(url) || {};
-    return { mesh, partial: true, status: b.status, err: b.msg };
+    return { mesh, partial: true, virtual: shared, status: b.status, err: b.msg };
   }
-  async loadTerrain(t) {
-    const L = this.layer;
-    if (!terrainAvailable(L, t.z, t.x, t.y)) return null;
+  /** Terrain for this tile: from the server, or cut from the parent where the server has none. */
+  async terrainData(t) {
+    const L = this.layer, p = this.parentOf(t);
+    const fromParent = () => p && p.qm ? cropQM(p.qm, t.x & 1, t.y & 1) : flatQM();
+    if (t.z > L.maxzoom || (p && p.virtual) || !terrainAvailable(L, t.z, t.x, t.y)) return { qm: fromParent(), virtual: true };
     const url = terrainTileUrl(L, t.z, t.x, t.y);
     let raw = tqmGet(url);
     if (raw === undefined) {
@@ -5438,23 +5557,28 @@ class TileSet {
       let res;
       try { res = await fetch(url, { headers: { Accept: QM_ACCEPT }, mode: 'cors', cache: t.tries ? 'reload' : 'default', signal: ac.signal }); }
       finally { clearTimeout(to); }
-      if (res.status === 404 || res.status === 204) { tqmPut(url, null); return null; }
-      if (!res.ok) throw httpErr(res.status, 'Terrain tile');
-      raw = await gunzipIfNeeded(await res.arrayBuffer());
-      tqmPut(url, raw);
+      if (res.status === 404 || res.status === 204) { tqmPut(url, null); raw = null; }
+      else {
+        if (!res.ok) throw httpErr(res.status, 'Terrain tile');
+        raw = await gunzipIfNeeded(await res.arrayBuffer());
+        tqmPut(url, raw);
+      }
     }
-    if (raw === null) return null;
-    const qm = decodeQM(raw);
+    if (raw === null) return { qm: fromParent(), virtual: true };
+    return { qm: decodeQM(raw), virtual: false };
+  }
+  async loadTerrain(t) {
+    const { qm, virtual } = await this.terrainData(t);
     const E = this.E, fr = E.fr, b = t.b, msl = this.cfg.terrainMsl && this.cfg.surface !== 'sphere';
     const vz = h => E.vz(h), stretched = E.exag() !== 1;
     // imagery composite in web mercator, sampled per vertex
     let tex = null, zm = 0, X0 = 0, Y0 = 0, nx = 1, ny = 1, missing = 0, status = 0, err = '';
     if (this.imgTpl) {
-      zm = clamp(t.z + (t.z >= this.maxZ ? 3 : 2), 0, this.imgMax);
+      zm = clamp(t.z + (t.z >= this.maxZ ? 2 : 1), 0, this.imgMax);
       for (;;) {
         X0 = Math.floor(GEO.merc.x(b.w, zm)); Y0 = Math.floor(GEO.merc.y(b.n, zm));
         nx = Math.floor(GEO.merc.x(b.e, zm) - 1e-9) - X0 + 1; ny = Math.floor(GEO.merc.y(b.s, zm) - 1e-9) - Y0 + 1;
-        if (nx * ny <= 24 || zm === 0) break;
+        if (nx * ny <= 12 || zm === 0) break;
         zm--;
       }
       const urls = [];
@@ -5463,11 +5587,18 @@ class TileSet {
       const cv = document.createElement('canvas'); cv.width = nx * 256; cv.height = ny * 256;
       const cx = cv.getContext('2d');
       cx.fillStyle = '#' + E.groundColor.getHexString(); cx.fillRect(0, 0, cv.width, cv.height);
+      // where an image is missing, draw the parent's composite under it so there are no grey holes
+      const pc = this.parentOf(t), pcv = pc && pc.mesh && pc.mesh.userData.canvas, pb = pc && pc.mesh && pc.mesh.userData.cbox;
+      if (got.some(im => !im) && pcv && pb) {
+        const kk = Math.pow(2, zm - pb.zm);
+        try { cx.drawImage(pcv, (pb.X0 * kk - X0) * 256, (pb.Y0 * kk - Y0) * 256, pcv.width * kk, pcv.height * kk); } catch (_) { /* parent image not drawable */ }
+      }
       got.forEach((im, k) => {
         if (im) cx.drawImage(im, (k % nx) * 256, Math.floor(k / nx) * 256, 256, 256);
         else { missing++; const bad = IMG_BAD.get(urls[k]) || {}; status = status || bad.status; err = err || bad.msg; }
       });
       tex = new THREE.CanvasTexture(cv); tex.anisotropy = E.aniso;
+      tex.userData = { canvas: cv, cbox: { X0, Y0, zm } };
     }
     const nV = qm.nV, edgeCount = qm.edges.reduce((sum, e) => sum + e.length, 0), total = nV + edgeCount;
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3), uv = new Float32Array(total * 2);
@@ -5475,8 +5606,9 @@ class TileSet {
     const dh = qm.maxH - qm.minH;
     for (let i = 0; i < nV; i++) {
       const lon = b.w + qm.u[i] / 32767 * (b.e - b.w), lat = b.s + qm.v[i] / 32767 * (b.n - b.s);
-      let hgt = qm.minH + qm.h[i] / 32767 * dh;
-      if (msl) hgt += GEO.geoidN(lat, lon);
+      let hgt;
+      if (qm.flat) hgt = E.surfH(lat, lon);
+      else { hgt = qm.hm ? qm.hm[i] : qm.minH + qm.h[i] / 32767 * dh; if (msl) hgt += GEO.geoidN(lat, lon); }
       hgt = vz(hgt);
       lats[i] = lat; lons[i] = lon; hs[i] = hgt;
       fr.toScene(lat, lon, hgt, pos, i * 3);
@@ -5486,8 +5618,8 @@ class TileSet {
     const skirt = Math.max(5, t.size * 0.015 + dh * 0.05 * E.exag());
     const tris = Array.from(qm.idx);
     let k = nV;
-    qm.edges.forEach((e, side) => {
-      const arr = Array.from(e).sort((a, c) => side === 0 || side === 2 ? qm.v[a] - qm.v[c] : qm.u[a] - qm.u[c]);
+    const sorted = qm.edges.map((e, side) => Array.from(e).sort((a, c) => side === 0 || side === 2 ? qm.v[a] - qm.v[c] : qm.u[a] - qm.u[c]));
+    sorted.forEach(arr => {
       const first = k;
       for (const vi of arr) {
         fr.toScene(lats[vi], lons[vi], hs[vi] - skirt, pos, k * 3);
@@ -5501,25 +5633,23 @@ class TileSet {
     if (tex) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(total > 65535 ? new THREE.BufferAttribute(Uint32Array.from(tris), 1) : new THREE.BufferAttribute(Uint16Array.from(tris), 1));
     if (qm.normals && !stretched) {
-      // skirts take the normal of the edge vertex they hang from
       k = nV;
-      qm.edges.forEach((e, side) => {
-        const arr = Array.from(e).sort((a, c) => side === 0 || side === 2 ? qm.v[a] - qm.v[c] : qm.u[a] - qm.u[c]);
-        for (const vi of arr) { nor[k * 3] = nor[vi * 3]; nor[k * 3 + 1] = nor[vi * 3 + 1]; nor[k * 3 + 2] = nor[vi * 3 + 2]; k++; }
-      });
+      for (const arr of sorted) for (const vi of arr) { nor[k * 3] = nor[vi * 3]; nor[k * 3 + 1] = nor[vi * 3 + 1]; nor[k * 3 + 2] = nor[vi * 3 + 2]; k++; }
       geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     } else geo.computeVertexNormals();
     geo.computeBoundingSphere();
     const clat = (b.s + b.n) / 2, clon = (b.w + b.e) / 2;
-    const cc = fr.toScene(clat, clon, vz((qm.minH + qm.maxH) / 2 + (msl ? GEO.geoidN(clat, clon) : 0)), [0, 0, 0]);
+    const cc = fr.toScene(clat, clon, qm.flat ? E.surfH(clat, clon) : vz((qm.minH + qm.maxH) / 2 + (msl ? GEO.geoidN(clat, clon) : 0)), [0, 0, 0]);
     t.c.set(cc[0], cc[1], cc[2]);
     const m = new THREE.MeshLambertMaterial(tex ? { map: tex, side: THREE.DoubleSide } : { color: E.groundColor, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geo, m);
     mesh.renderOrder = t.z;
     mesh.userData.terrain = true;
-    return missing ? { mesh, partial: true, status, err } : { mesh };
+    if (tex) { mesh.userData.canvas = tex.userData.canvas; mesh.userData.cbox = tex.userData.cbox; }
+    const r = { mesh, qm, virtual };
+    return missing ? Object.assign(r, { partial: true, status, err }) : r;
   }
-  disposeMesh(mesh) { mesh.geometry.dispose(); if (mesh.material.map) mesh.material.map.dispose(); mesh.material.dispose(); }
+  disposeMesh(mesh) { mesh.geometry.dispose(); if (mesh.material.map && !mesh.userData.sharedMap) mesh.material.map.dispose(); mesh.material.dispose(); }
   disposeTile(t) { if (t.mesh) { this.group.remove(t.mesh); this.disposeMesh(t.mesh); t.mesh = null; } }
   pending() { let n = this.active; for (const t of this.queue) if (t.state === 'queued' || t.refreshing) n++; return n; }
 }
@@ -5633,7 +5763,7 @@ const V3 = {
     this.readColors();
     const keys = {
       frame: [ix && ix.name, ix && ix.size, ix && ix.tMin, c.surface, c.vehicle, (c.pos || []).filter(p => p.on).map(p => p.src).join()].join('|'),
-      paths: JSON.stringify([c.pos, c.amsl, c.zoff, c.range, c.colorBy, c.curtain, c.waypoints, c.vehicle, c.range === 'view' ? [Math.round(st.view.t0), Math.round(st.view.t1)] : 0, c.terrain && c.stretchPaths ? c.exag : 1]),
+      paths: JSON.stringify([c.pos, c.dropJumps, c.amsl, c.zoff, c.range, c.colorBy, c.curtain, c.waypoints, c.vehicle, c.range === 'view' ? [Math.round(st.view.t0), Math.round(st.view.t1)] : 0, c.terrain && c.stretchPaths ? c.exag : 1]),
       tiles: JSON.stringify([c.imagery, c.imageryUrl, c.imageryMax, c.terrain, c.terrainUrl, c.terrainMsl, c.terrain ? c.exag : 1, c.terrain && c.exag !== 1 ? c.amsl : 0]),
       water: JSON.stringify([c.water, c.waterLevel, c.waterDepth, c.surface, c.terrain && c.stretchWater ? [c.exag, c.amsl] : 1]),
       model: JSON.stringify([c.model, c.modelName])
@@ -5650,7 +5780,7 @@ const V3 = {
     if (force || keys.tiles !== this.cfgKey.tiles) { this.cfgKey.tiles = keys.tiles; this.buildTiles(); }
     if (force || keys.water !== this.cfgKey.water) this.buildWater(); else this.updateWaterLook();
     this.cfgKey.frame = keys.frame; this.cfgKey.paths = keys.paths; this.cfgKey.model = keys.model; this.cfgKey.water = keys.water;
-    this.posD = posData(c.vehicle); this.attD = attData(c.att);
+    this.posD = posData(c.vehicle, c.dropJumps); this.attD = attData(c.att);
     this.applyFix();
     this.req();
   },
@@ -5670,23 +5800,27 @@ const V3 = {
 
   buildFrame() {
     const c = this.cfg, ix = st.ix;
-    const d = posData(c.vehicle) || posData(c.pos.find(p => p.on) ? c.pos.find(p => p.on).src : '');
+    // takeoff and the map area always ignore position jumps, so one bad fix cannot spread the map over a continent
+    const on = c.pos.filter(p => p.on).map(p => p.src);
+    const d = posData(c.vehicle, true) || posData(on[0], true);
     this.fr = null;
     if (!d) return;
     let k = -1;
     const tArm = ix.armed.length ? ix.armed[0].t0 : -Infinity;
-    for (let i = EX.lowerBound(d.t, tArm); i < d.t.length; i++) if (validLL(d.lat[i], d.lon[i])) { k = i; break; }
-    if (k < 0) for (let i = 0; i < d.t.length; i++) if (validLL(d.lat[i], d.lon[i])) { k = i; break; }
+    for (let i = EX.lowerBound(d.t, tArm); i < d.t.length; i++) if (goodFix(d, i)) { k = i; break; }
+    if (k < 0) for (let i = 0; i < d.t.length; i++) if (goodFix(d, i)) { k = i; break; }
     if (k < 0) return;
     this.home = { lat: d.lat[k], lon: d.lon[k], alt: d.alt ? d.alt[k] : 0 };
     this.fr = GEO.frame(this.home.lat, this.home.lon, c.surface === 'sphere');
-    let far = 0;
-    for (const p of c.pos) {
-      const pd = posData(p.src); if (!pd) continue;
-      const m = GEO.mPerDeg(this.home.lat);
-      const step = Math.max(1, Math.floor(pd.t.length / 3000));
-      for (let i = 0; i < pd.t.length; i += step) if (validLL(pd.lat[i], pd.lon[i])) far = Math.max(far, Math.hypot((pd.lat[i] - this.home.lat) * m.lat, (pd.lon[i] - this.home.lon) * m.lon));
+    // the map covers the shown paths: 99.5% of their fixes, so a few stray ones do not count
+    const m = GEO.mPerDeg(this.home.lat), dist = [];
+    for (const src of on.length ? on : [c.vehicle]) {
+      const pd = posData(src, true); if (!pd) continue;
+      const step = Math.max(1, Math.floor(pd.t.length / 4000));
+      for (let i = 0; i < pd.t.length; i += step) if (goodFix(pd, i)) dist.push(Math.hypot((pd.lat[i] - this.home.lat) * m.lat, (pd.lon[i] - this.home.lon) * m.lon));
     }
+    dist.sort((a, b) => a - b);
+    const far = dist.length ? dist[Math.floor((dist.length - 1) * 0.995)] : 0;
     this.roi = { lat: this.home.lat, lon: this.home.lon, r: clamp(far * 1.6 + 1500, 2500, 250000) };
     if (this.fogSky) { this.fogSky.near = this.roi.r * 0.9; this.fogSky.far = this.roi.r * 2.4; }
   },
@@ -5698,14 +5832,15 @@ const V3 = {
   buildPaths() {
     const c = this.cfg, ix = st.ix, fr = this.fr;
     for (const o of [...this.pathGroup.children]) { this.pathGroup.remove(o); o.traverse(x => { if (x.geometry) x.geometry.dispose(); if (x.material) x.material.dispose(); }); }
-    this.pick = [];
+    this.pick = []; this.jumps = {};
     const t0 = c.range === 'view' ? st.view.t0 : -Infinity, t1 = c.range === 'view' ? st.view.t1 : Infinity;
     const mcol = c.colorBy === 'mode' ? this.modeColors() : null;
     const spans = ix.modeSpans;
     const col = new THREE.Color();
     for (const p of c.pos) {
       if (!p.on) continue;
-      const d = posData(p.src); if (!d) continue;
+      const d = posData(p.src, c.dropJumps); if (!d) continue;
+      this.jumps[p.src] = jumpCount(d);
       const i0 = EX.lowerBound(d.t, t0), i1 = EX.upperBound(d.t, t1), n = i1 - i0;
       if (n < 2) continue;
       const step = Math.max(1, Math.ceil(n / 40000));
@@ -5717,7 +5852,7 @@ const V3 = {
       const base = new THREE.Color(st.colors['c' + ((p.color % NC) + 1)]);
       const tmp = [0, 0, 0];
       for (let i = i0; i < i1; i += step) {
-        if (!validLL(d.lat[i], d.lon[i])) { prev = -1; continue; }
+        if (!goodFix(d, i)) { prev = -1; continue; }
         fr.toScene(d.lat[i], d.lon[i], this.pathH(d.lat[i], d.lon[i], d.alt ? d.alt[i] : this.home.alt, p.dz), tmp, 0);
         pts.push(tmp[0], tmp[1], tmp[2]); times.push(d.t[i]);
         const k = pts.length / 3 - 1;
@@ -5740,6 +5875,13 @@ const V3 = {
       if (c.curtain && p.src === c.vehicle) this.pathGroup.add(this.curtain(pts, base));
     }
     if (c.waypoints) { const w = this.missionObj(); if (w) this.pathGroup.add(w); }
+    this.showJumps();
+  },
+  showJumps() {
+    const el = this.g && this.g._el.body && this.g._el.body.querySelector('.v3-jumps'); if (!el) return;
+    const c = this.cfg, list = Object.entries(this.jumps || {}).filter(([, n]) => n > 0);
+    el.textContent = !c.dropJumps ? '' : list.length ? 'Jumps hidden: ' + list.map(([s, n]) => `${s} ${n} fix${n === 1 ? '' : 'es'}`).join(', ') + '.' : '';
+    el.hidden = !el.textContent;
   },
   curtain(pts, color) {
     const n = pts.length / 3, gh = [0, 0, 0];
@@ -6108,7 +6250,7 @@ const V3 = {
   },
   /** Height offset for path src that matches the vehicle path over the first seconds after takeoff. */
   matchOffset(src) {
-    const c = this.cfg, a = posData(c.vehicle), b = posData(src); if (!a || !b || !a.alt || !b.alt) return null;
+    const c = this.cfg, a = posData(c.vehicle, c.dropJumps), b = posData(src, c.dropJumps); if (!a || !b || !a.alt || !b.alt) return null;
     const ix = st.ix, t0 = ix.armed.length ? ix.armed[0].t0 : Math.max(a.t[0], b.t[0]);
     const diffs = [];
     for (let k = 0; k < 20; k++) { const t = t0 + 1e6 + k * 0.5e6, P = posAt(a, t), Q = posAt(b, t); if (P && Q) diffs.push(P.alt - Q.alt); }
@@ -6328,6 +6470,8 @@ function fill3dSettings(g) {
   P.append(list);
   row(P, 'Show', select('range', [['all', 'Whole log'], ['view', 'Time range shown in the graphs']]));
   row(P, 'Colour', select('colorBy', [['source', 'One colour per source'], ['mode', 'By flight mode']]));
+  P.append(check('dropJumps', 'Hide position jumps (faster than 600 m/s)'));
+  const jl = h('div', 'v3-sub v3-jumps'); jl.hidden = true; P.append(jl);
   P.append(check('curtain', 'Curtain down to takeoff height'), check('waypoints', 'Mission waypoints (CMD)'));
 
   // vehicle

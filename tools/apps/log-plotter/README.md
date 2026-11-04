@@ -7,15 +7,11 @@ Edit the files in `src/`, then run:
 python3 build.py
 ```
 
-In this repository the page is served by the tools service at `/log-plotter`. After
-changing `src/`, rebuild it with this station's hook (below) and copy it in place:
-
-```
-python3 build.py --host-script /log-plotter/config.js
-cp out/dataflash-log-plotter.html ../../gcs_tools/static/apps/log-plotter.html
-```
-
-(`tools/tests/smoke_test.sh` checks that the copy matches what `src/` builds.)
+In this repository the page is served by the tools service at `/log-plotter`, from its own
+copy, `tools/gcs_tools/static/apps/log-plotter.html` (built with the station's hook, below).
+`python3 build.py` updates that copy too, so after changing `src/` run it once and reload
+`/log-plotter`; `--no-station` leaves the copy alone. (`tools/tests/smoke_test.sh` checks that
+the copy matches what `src/` builds.)
 
 Without `--host-script` it writes two files to `out/`:
 
