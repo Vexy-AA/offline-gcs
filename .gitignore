@@ -12,3 +12,6 @@
 
 __pycache__/
 *.pyc
+
+# build output of tools/apps/log-plotter (the page served is tools/gcs_tools/static/apps/log-plotter.html)
+/tools/apps/log-plotter/out/

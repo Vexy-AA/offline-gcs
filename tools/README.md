@@ -14,6 +14,7 @@ The `tools` service is always on and publishes port 80 (`GCS_HTTP_PORT` in `.env
 | `/tools` data tools | Diagram of the stack with live status; **Build data** runs the converters below and streams their log (cancel, recent jobs, the matching `./gcs-tools` command); **Add area** merges a new region into the existing tiles, terrain and elevation pieces, with a map of both areas, a dry run and restore points (see [Adding an area](#adding-an-area)); **Files** uploads to `data/src`, unpacks tile zips, and says what each raster is good for; **Health** is the full check (`check` below) with server logs and restart buttons. |
 | `/elevation` | Elevation viewer: your imagery as the map, outlines of the elevation pieces and the terrain area, click for a height, draw a line for its profile, or shade an area by height. |
 | `/log-splitter` | The DataFlash log splitter (`static/apps/log-splitter.html`): works on the file in your browser, nothing is uploaded. |
+| `/log-plotter` | The DataFlash log plotter (`static/apps/log-plotter.html`, source in `tools/apps/log-plotter`): plot any logged value, formulas, spectra, and the flight in 3D. Works on the file in your browser, nothing is uploaded. Its 3D map and terrain default to this station's own (every `.mbtiles` is a Map choice), through `/tiles/<set>/{z}/{x}/{y}.png` and `/quantized/` on this server. |
 
 Jobs run one at a time, as the owner of the `data` folder (so files aren't
 root-owned). Links like `/tools#build=terrain`, `/tools#add`, `/tools#files` and

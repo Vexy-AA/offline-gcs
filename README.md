@@ -11,6 +11,8 @@ server is up. It also has:
   upload source files
 - an elevation viewer (`/elevation`)
 - the DataFlash log splitter (`/log-splitter`)
+- the DataFlash log plotter (`/log-plotter`): any logged value, formulas, spectra, and the flight in 3D
+  over this station's imagery and terrain
 
 The same tools also run from the command line (`./gcs-tools`, see [tools/README.md](tools/README.md)).
 
@@ -119,6 +121,7 @@ Details: [tools/README.md, Adding an area](tools/README.md#adding-an-area).
 | Data tools       | http://localhost/tools                                               |
 | Elevation viewer | http://localhost/elevation                                           |
 | Log splitter     | http://localhost/log-splitter                                        |
+| Log plotter      | http://localhost/log-plotter                                         |
 | UAVLogViewer     | http://localhost:8080/                                               |
 | Map tiles        | http://localhost:8000/services/custom/tiles/{z}/{x}/{y}.png          |
 | Tile map preview | http://localhost:8000/services/custom/map                            |

@@ -1,0 +1,118 @@
+<header class="top band">
+  <div class="brand">
+    <h1>DataFlash Log <span>Plotter</span></h1>
+    <span class="tag">ArduPilot .bin</span>
+  </div>
+  <div class="filebar">
+    <span class="chip" id="fileChip" title="">no log</span>
+    <label class="lbl" for="detailSel" title="How many samples per second to keep for each message. Every sample needs the most memory.">Keep
+      <select id="detailSel" class="sel">
+        <option value="auto">Auto</option>
+        <option value="0">every sample</option>
+        <option value="400">up to 400 Hz</option>
+        <option value="100">up to 100 Hz</option>
+        <option value="25">up to 25 Hz</option>
+      </select>
+    </label>
+    <label class="btn primary" for="fileInput" tabindex="0" id="openBtn">Open .bin log…</label>
+    <input type="file" id="fileInput" accept=".bin,.BIN,.log,.LOG" hidden>
+    <span class="seg" role="group" aria-label="Undo and redo">
+      <button type="button" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">↶ Undo</button>
+      <button type="button" id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+    </span>
+    <button class="btn" type="button" id="layoutBtn" aria-haspopup="menu">Layouts <span class="caret">▾</span></button>
+    <button class="btn" type="button" id="exportBtn" aria-haspopup="menu">Export <span class="caret">▾</span></button>
+    <button class="btn" type="button" id="helpBtn" title="Formula help (?)">Formula help</button>
+  </div>
+</header>
+
+<div class="band">
+  <section class="scan" id="scanBox" hidden aria-live="polite">
+    <div class="row">
+      <strong id="scanTitle">Reading log…</strong>
+      <span class="num" id="scanText"></span>
+      <button class="btn small ghost" id="scanCancel" type="button">Cancel</button>
+    </div>
+    <div class="bar"><i id="scanBar"></i></div>
+  </section>
+  <div class="summary" id="summary"></div>
+
+  <div class="bench">
+    <aside class="side" id="side" aria-label="Log contents">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" id="tabFields" aria-selected="true" data-tab="fields">Fields</button>
+        <button type="button" role="tab" id="tabEvents" aria-selected="false" data-tab="events">Messages</button>
+        <button type="button" role="tab" id="tabParams" aria-selected="false" data-tab="params">Parameters</button>
+      </div>
+      <div class="side-search"><input class="inp" id="sideSearch" type="search" placeholder="Search fields" autocomplete="off" spellcheck="false"></div>
+      <div class="side-list" id="sideList"></div>
+      <p class="note side-hint" id="sideHint">Click to add to the selected graph. Shift-click for a new graph. Drag onto any graph.</p>
+    </aside>
+
+    <main class="main" id="main">
+      <div class="pinstack" id="pinStack" hidden></div>
+      <div class="tl" id="tl">
+        <div class="ovwrap">
+          <canvas id="overview" aria-label="Whole log: flight modes, messages and the part shown below. Drag to move, scroll to zoom."></canvas>
+        </div>
+        <div class="tlbar">
+          <span class="read" id="readCursor"><span>Cursor</span><b id="readT">–</b><span class="mode" id="readMode"></span></span>
+          <span class="read"><span>Showing</span><b id="readView">–</b></span>
+          <span class="selinfo" id="selInfo" hidden>
+            <span>Selected</span><b id="selText"></b>
+            <button class="btn small ghost" id="selZoom" type="button">Zoom to it</button>
+            <button class="icon-btn" id="selClear" type="button" title="Clear selection (Esc)" aria-label="Clear selection">✕</button>
+          </span>
+          <span class="grow"></span>
+          <span class="tlctl">
+          <span class="seg" role="group" aria-label="Playback">
+            <button type="button" id="playBtn" title="Play the log along the time axis (Space)" aria-pressed="false">▶ Play</button>
+            <select id="playSpeed" class="sel-seg" aria-label="Playback speed" title="Playback speed">
+              <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option>
+            </select>
+          </span>
+          <span class="lbl">Drag to</span>
+          <span class="seg" role="group" aria-label="What dragging on a graph does" id="dragSeg">
+            <button type="button" data-m="zoom" aria-pressed="true" title="Drag across a graph to zoom in (Z)">Zoom</button>
+            <button type="button" data-m="select" aria-pressed="false" title="Drag to select a time range for statistics and spectra (S, or hold Shift)">Select</button>
+            <button type="button" data-m="pan" aria-pressed="false" title="Drag to move along the log (P, or hold Alt)">Pan</button>
+          </span>
+          <button class="btn small" id="zBack" type="button" title="Previous zoom (Backspace)">Back</button>
+          <button class="btn small" id="zAll" type="button" title="Show the whole log (0 or double-click)">Whole log</button>
+          <button class="btn small" id="viewBtn" type="button" aria-haspopup="menu">View <span class="caret">▾</span></button>
+          <button class="icon-btn" id="tlPin" type="button" aria-pressed="true" aria-label="Pin the timeline" title="Unpin the timeline so it scrolls away"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.6 2.2l4.2 4.2M11.7 4.3L8.9 7.1 5.6 6.6 4.5 7.7l3.8 3.8 1.1-1.1-.5-3.3 2.8-2.8M6.4 9.6L2.4 13.6"/></svg></button>
+          </span>
+        </div>
+      </div>
+
+      <div id="graphList"></div>
+
+      <div class="dropzone-add" id="addZone">
+        <button class="btn primary" type="button" id="addGraph">+ Add graph</button>
+        <button class="btn" type="button" id="tplBtn" aria-haspopup="menu">Add from template <span class="caret">▾</span></button>
+        <button class="btn" type="button" id="add3d" title="Map, flight path and vehicle in 3D">Add 3D view</button>
+        <span>or drop a field here to start a new graph</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="menu" id="menu" role="menu" hidden></div>
+<div class="ac" id="ac" role="listbox" hidden></div>
+<div class="sig" id="sig" hidden></div>
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="help" aria-label="Formula help" hidden>
+  <div class="drawer-head">
+    <div class="row">
+      <h2>Formula help</h2>
+      <span class="grow"></span>
+      <button class="icon-btn" id="helpClose" type="button" aria-label="Close help" title="Close (Esc)">✕</button>
+    </div>
+    <input class="inp" id="helpSearch" type="search" placeholder="Search functions, e.g. filter, angle, average" autocomplete="off" spellcheck="false">
+    <nav class="hnav" id="helpNav" aria-label="Help sections"></nav>
+  </div>
+  <div class="drawer-body" id="helpBody"></div>
+</aside>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<div class="dropzone" id="dropzone" hidden>Drop the .bin log to open it</div>

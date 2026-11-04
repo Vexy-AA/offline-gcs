@@ -773,6 +773,37 @@ def quick_status():
         return dict(ex.map(probe, STATUS_PROBES))
 
 
+TILE_RE = re.compile(r"^/tiles/([A-Za-z0-9_-]{1,64})/(\d{1,2})/(\d{1,8})/(\d{1,8})(?:\.(?:png|jpe?g|webp))?$")
+QUANT_RE = re.compile(r"^/quantized/([A-Za-z0-9_./-]{1,200})$")
+
+
+def plotter_config():
+    """window.DFPLOT_HOST for the log plotter: every tile set as a map choice ('custom' first,
+    and the default), and the terrain for new 3D views if there is any. All on this server's
+    origin (/tiles/, /quantized/), so it works from any machine on the network."""
+    imagery = {}
+    paths = sorted(glob.glob(os.path.join(DATA, "mbtiles", "*.mbtiles")),
+                   key=lambda p: (os.path.basename(p) != "custom.mbtiles", os.path.basename(p)))
+    for p in paths:
+        m = mbtiles_info(p)
+        if m.get("error") or not NAME_RE.match(m["name"]):
+            continue
+        try:
+            maxz = int(m.get("maxzoom") or 19)
+        except ValueError:
+            maxz = 19
+        imagery[f"gcs-{m['name']}"] = {
+            "label": f"This ground station: {m['name']}.mbtiles", "url": f"/tiles/{m['name']}/{{z}}/{{x}}/{{y}}.png",
+            "max": max(1, min(23, maxz)), "attr": f"{m['name']}.mbtiles (this ground station)"}
+    defaults = {}
+    if imagery:
+        defaults["imagery"] = next(iter(imagery))
+    if os.path.exists(os.path.join(DATA, "terrain", "layer.json")):
+        # heights in this stack's terrain are as stored in the DEM: above sea level
+        defaults.update(terrain=True, terrainUrl="/quantized/layer.json", terrainMsl=True)
+    return {"imagery": imagery, "defaults": defaults}
+
+
 def elevation_coverage():
     out = {"pieces": [], "terrain": None, "tilesets": []}
     summary = os.path.join(DATA, "elevation", "summary.json")
@@ -880,7 +911,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):  # keep the container log for errors and jobs
-        if not self.path.startswith(("/api/jobs", "/static", "/api/data")):
+        if not self.path.startswith(("/api/jobs", "/static", "/api/data", "/tiles/", "/quantized/", "/log-plotter/")):
             sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     # -- helpers
@@ -892,8 +923,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
-        for k, v in (headers or {}).items():
+        headers = dict(headers or {})
+        self.send_header("Cache-Control", headers.pop("Cache-Control", "no-cache"))
+        for k, v in headers.items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
@@ -945,11 +977,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _get(self):
         path, q = self._route()
         pages = {"/": "portal.html", "/index.html": "portal.html", "/tools": "tools.html",
-                 "/elevation": "elevation.html", "/log-splitter": "apps/log-splitter.html"}
+                 "/elevation": "elevation.html", "/log-splitter": "apps/log-splitter.html",
+                 "/log-plotter": "apps/log-plotter.html"}
         if path in pages:
             return self._static(pages[path])
-        if path in ("/tools/", "/elevation/", "/log-splitter/"):
+        if path in ("/tools/", "/elevation/", "/log-splitter/", "/log-plotter/"):
             return self._send(301, b"", headers={"Location": path.rstrip("/")})
+        if path == "/log-plotter/config.js":
+            body = ("/* This ground station's imagery and terrain for the log plotter (see tools/apps/log-plotter) */\n"
+                    f"window.DFPLOT_HOST = {json.dumps(plotter_config())};\n")
+            return self._send(200, body, "application/javascript; charset=utf-8")
+        if path.startswith(("/tiles/", "/quantized/")):
+            return self._proxy(path)
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
         if path == "/api/info":
@@ -1001,6 +1040,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             text = dockerapi.logs(conts[m.group(1)]["id"], tail=int(q.get("tail", ["150"])[0]))
             return self._send(200, {"service": m.group(1), "log": text})
         raise ApiError("not found", 404)
+
+    def _proxy(self, path):
+        """Map tiles and terrain from the other servers, on this server's origin: the log plotter
+        fetches them with CORS, and mbtileserver sends no CORS headers."""
+        eps = stackcheck.endpoints()
+        m = TILE_RE.match(path)
+        if m:
+            tset, z, x, y = m.groups()
+            url = f"{eps['mbtiles']}/services/{tset}/tiles/{z}/{x}/{y}.png"
+        else:
+            m = QUANT_RE.match(path)
+            if not m or ".." in m.group(1).split("/"):
+                raise ApiError("not found", 404)
+            query = urllib.parse.urlparse(self.path).query
+            url = f"{eps['terrain']}/quantized/{m.group(1)}" + (f"?{query}" if query else "")
+        try:
+            code, h, body = stackcheck.get(url, timeout=15)
+        except Exception as e:  # noqa: BLE001
+            return self._send(502, f"{url.split('/')[2]} not reachable: {stackcheck.reason(e)}", "text/plain; charset=utf-8")
+        headers = {"Cache-Control": h.get("Cache-Control") or "public, max-age=300"}
+        if h.get("Content-Encoding"):
+            headers["Content-Encoding"] = h["Content-Encoding"]
+        return self._send(code, body, h.get("Content-Type") or "application/octet-stream", headers=headers)
 
     def _static(self, rel):
         path = os.path.realpath(os.path.join(STATIC, rel))

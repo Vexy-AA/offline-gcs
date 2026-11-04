@@ -57,4 +57,11 @@ else
   echo "== elevation: skipped (open-elevation/create-tiles.sh not available)"
 fi
 
+plotter="$here/../apps/log-plotter"
+if [[ -f "$plotter/build.py" ]]; then
+  echo "== log plotter page matches its source"
+  "$py" -I "$plotter/build.py" --host-script /log-plotter/config.js --out "$work/plotter" > /dev/null
+  cmp "$work/plotter/dataflash-log-plotter.html" "$here/../gcs_tools/static/apps/log-plotter.html" && echo "identical"
+fi
+
 echo "SMOKE TEST PASSED"
