@@ -1,6 +1,6 @@
 """offline-gcs data tools.
 
-  mbtiles        imagery raster(s) or a {z}/{x}/{y} tile folder -> .mbtiles (mbtileserver)
+  mbtiles        imagery raster(s) or a {z}/{x}/{y} tile folder -> .mbtiles (map tile server)
   terrain        DEM raster(s) -> Cesium quantized-mesh tiles + layer.json (terrain server)
   elevation      split a DEM into pieces for open-elevation (uses its create-tiles.sh)
   add-mbtiles    add a new area to an existing .mbtiles (keeps what is there)
@@ -9,9 +9,11 @@
   backups        list / restore / delete the restore points the add-* commands make
   inspect        explain what a tile file / tile folder holds and why it can or can't be used
   repair         copy every readable tile of a damaged tile file into a new .mbtiles
+  index-mbtiles  give an .mbtiles file the index tile lookups need (keeps a restore point)
   check-terrain  validate a terrain folder (and compare it with the DEM)
   check          health check of the running servers (tiles, terrain, elevation, ...)
   serve          the tools web page (runs as the "tools" service)
+  tileserver     the map tile server (runs as the "mbtiles" service)
 
 Run "<command> -h" for the options of each command.
 """
@@ -19,12 +21,12 @@ Run "<command> -h" for the options of each command.
 import argparse
 import sys
 
-from . import (add_elevation, add_mbtiles, add_terrain, backups, check_terrain, elevation, inspect_tiles,
-               mbtiles, repair_tiles, stackcheck, terrain, web)
+from . import (add_elevation, add_mbtiles, add_terrain, backups, check_terrain, elevation, index_mbtiles,
+               inspect_tiles, mbtiles, repair_tiles, stackcheck, terrain, tileserver, web)
 from .common import install_sigterm, terminating
 
 COMMANDS = {
-    "mbtiles": (mbtiles, "imagery -> .mbtiles for mbtileserver"),
+    "mbtiles": (mbtiles, "imagery -> .mbtiles for the map tile server"),
     "terrain": (terrain, "DEM -> quantized-mesh terrain tiles"),
     "elevation": (elevation, "split a DEM for open-elevation"),
     "add-mbtiles": (add_mbtiles, "add a new area to an existing .mbtiles"),
@@ -33,9 +35,11 @@ COMMANDS = {
     "backups": (backups, "list / restore / delete restore points"),
     "inspect": (inspect_tiles, "check a tile file or tile folder step by step"),
     "repair": (repair_tiles, "save the readable tiles of a damaged tile file"),
+    "index-mbtiles": (index_mbtiles, "index an .mbtiles file so tiles are found quickly"),
     "check-terrain": (check_terrain, "validate a terrain folder"),
     "check": (stackcheck, "health check of the running servers"),
     "serve": (web, "run the tools web page"),
+    "tileserver": (tileserver, "run the map tile server"),
 }
 
 
@@ -51,7 +55,7 @@ def main(argv=None):
     if not args.command:
         parser.print_help()
         return 2
-    if args.command != "serve":
+    if args.command not in ("serve", "tileserver"):
         install_sigterm()
     try:
         COMMANDS[args.command][0].main(args=args)

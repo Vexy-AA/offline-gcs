@@ -5,23 +5,39 @@ services:
 
   # ---- Raster imagery (XYZ tiles from ./data/mbtiles/*.mbtiles) -------------
   # LAN URL: http://<host>:8000/services/custom/tiles/{z}/{x}/{y}.png
-  # List:    http://<host>:8000/services
+  # List:    http://<host>:8000/services        Status: http://<host>:8000/status
+  # gcs-tools' tile server (tools/gcs_tools/tileserver.py) from the tools image:
+  # the same URLs and answers as mbtileserver, which it replaces because that
+  # could stop answering altogether (see README.md, "Map tiles stop loading").
+  # New or replaced .mbtiles files are picked up without a restart.
   mbtiles:
-    image: ghcr.io/consbio/mbtileserver:latest
+    build: ./tools
+    image: offline-gcs-tools:1.2.0
     restart: unless-stopped
+    entrypoint: ["python3", "-m", "gcs_tools.tileserver"]
     # A tile the file doesn't have (e.g. zoom 15-17 when the imagery stops at 14)
     # answers 404 instead of a blank PNG, so Cesium falls back to enlarging the
     # parent tile rather than drawing nothing.
-    command: ["--missing-image-tile-404"]
-    environment:
-      PORT: 8000
-      TILE_DIR: /tilesets
-      # Load new or replaced .mbtiles files without a restart.
-      ENABLE_FS_WATCH: "true"
+    command: ["--dir", "/tilesets", "--port", "8000", "--missing-image-tile-404"]
     volumes:
       - ./data/mbtiles:/tilesets:ro
+      - ./tools/gcs_tools:/opt/gcs-tools/gcs_tools:ro   # run the repo's code, no rebuild needed
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/status', timeout=10)"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 15s
+  # The previous server, if you ever need it back (replace the block above):
+  # mbtiles:
+  #   image: ghcr.io/consbio/mbtileserver:latest
+  #   restart: unless-stopped
+  #   command: ["--missing-image-tile-404"]
+  #   environment: { PORT: 8000, TILE_DIR: /tilesets }
+  #   volumes: [ "./data/mbtiles:/tilesets:ro" ]
+  #   ports: [ "8000:8000" ]
 
   # ---- Cesium quantized-mesh terrain (./data/terrain/layer.json + 0/ 1/ ...) --
   # LAN URL: http://<host>:8011/quantized/layer.json

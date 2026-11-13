@@ -131,7 +131,7 @@ function folderLines(key) {
 function svcSub(key) {
   const port = S.info ? `:${S.info.ports[key]}` : '';
   const extra = {
-    mbtiles: 'mbtileserver', terrain: 'nginx', elevation: 'open-elevation',
+    mbtiles: 'tile server', terrain: 'nginx', elevation: 'open-elevation',
     logviewer: 'UAV Log Viewer', webtools: 'ArduPilot',
   }[key];
   return `${port}  ${extra}`;
@@ -273,7 +273,8 @@ function renderHealth() {
     const items = sec.items.map((it) => `<li class="i-${it.status}">
         <span class="g" aria-hidden="true">${GLYPH[it.status]}</span>
         <span class="t"><span class="sr">${STATUS_WORD[it.status]}: </span>${esc(it.text)}</span>
-        ${it.detail && it.status !== 'ok' ? `<span class="d">${withCode(it.detail)}</span>` : ''}</li>`).join('');
+        ${it.detail && it.status !== 'ok' ? `<span class="d">${withCode(it.detail)}</span>` : ''}
+        ${it.action ? `<span class="d"><button type="button" data-action='${esc(JSON.stringify(it.action))}'>${esc(it.action.label)}</button></span>` : ''}</li>`).join('');
     return `<article class="svc s-${st.cls}" id="svc-${sec.id}">
       <div class="svc-head"><h3 tabindex="-1">${esc(SERVICE_TITLES[sec.id] || sec.title)}</h3>
         <span class="state-word">${esc(st.word)}</span>
@@ -286,6 +287,19 @@ function renderHealth() {
 $('#health').addEventListener('click', async (ev) => {
   const lb = ev.target.closest('[data-log]');
   const rb = ev.target.closest('[data-restart]');
+  const ab = ev.target.closest('[data-action]');
+  if (ab) {
+    const a = JSON.parse(ab.dataset.action);
+    ab.disabled = true;
+    try {
+      const job = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: a.kind, params: a.params }) });
+      selectTab('build');
+      viewJob(job.id);
+    } catch (e) { alert(e.message); }
+    finally { ab.disabled = false; }
+    return;
+  }
   if (lb) {
     const svc = lb.dataset.log;
     $('#logdlg-title').textContent = `${SERVICE_TITLES[svc]} server log`;

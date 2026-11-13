@@ -240,8 +240,8 @@ def _after_elevation(job):
 
 
 def _after_mbtiles(job):
-    job.notes.append("mbtileserver loads the new file by itself (ENABLE_FS_WATCH). "
-                     "If it doesn't show up, restart mbtiles.")
+    job.notes.append("The map tile server picks up the new file by itself within a few seconds "
+                     "(reload the map page). If it doesn't, the Health tab says why.")
 
 
 def _after_terrain(job):
@@ -295,7 +295,7 @@ def build_job(kind, p):
     for s in sources:
         if not os.path.exists(s):
             raise ApiError(f"not found: {host_view(s)}")
-    if kind not in ("check-terrain", "restore", "add-mbtiles", "inspect") and not sources:
+    if kind not in ("check-terrain", "restore", "add-mbtiles", "inspect", "index-mbtiles") and not sources:
         raise ApiError("choose at least one source file")
 
     if kind == "mbtiles":
@@ -430,6 +430,10 @@ def build_job(kind, p):
         if p.get("deep"):
             args.append("--deep")
         return Job(kind, f"Check {os.path.basename(path.rstrip('/'))}", args)
+
+    if kind == "index-mbtiles":
+        path = tileset_path(p.get("tileset") or "")
+        return Job(kind, f"Index {os.path.basename(path)}", ["index-mbtiles", path], _after_mbtiles)
 
     if kind == "repair":
         if len(sources) != 1 or os.path.isdir(sources[0]):
@@ -1043,7 +1047,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _proxy(self, path):
         """Map tiles and terrain from the other servers, on this server's origin: the log plotter
-        fetches them with CORS, and mbtileserver sends no CORS headers."""
+        fetches them with CORS, and mbtileserver (the tile server before gcs-tools' own) sent none."""
         eps = stackcheck.endpoints()
         m = TILE_RE.match(path)
         if m:

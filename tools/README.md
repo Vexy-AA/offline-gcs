@@ -26,18 +26,20 @@ container status, logs and restarts.
 
 | Command         | Input                                   | Output                          | Served by         |
 |-----------------|-----------------------------------------|---------------------------------|-------------------|
-| `mbtiles`       | imagery raster(s), or a `{z}/{x}/{y}` tile folder | `data/mbtiles/<name>.mbtiles` | mbtileserver :8000 |
+| `mbtiles`       | imagery raster(s), or a `{z}/{x}/{y}` tile folder | `data/mbtiles/<name>.mbtiles` | tile server :8000 |
 | `terrain`       | DEM raster(s), any size, any CRS        | `data/terrain/layer.json` + `{z}/{x}/{y}.terrain` | nginx :8011 |
 | `elevation`     | DEM raster(s)                           | `data/elevation/<name>_<x>_<y>.tif` | open-elevation :8082 |
-| `add-mbtiles`   | tile folder, .mbtiles or imagery raster(s) | adds to an existing `.mbtiles` | mbtileserver :8000 |
+| `add-mbtiles`   | tile folder, .mbtiles or imagery raster(s) | adds to an existing `.mbtiles` | tile server :8000 |
 | `add-terrain`   | DEM raster(s) of a new area             | adds to `data/terrain`          | nginx :8011       |
 | `add-elevation` | DEM raster(s) of a new area             | adds pieces to `data/elevation` | open-elevation :8082 |
 | `backups`       | restore points in `data/backups`        | list / restore / delete         |                   |
 | `inspect`       | a tile file or tile folder              | step-by-step report: can it be added, and if not why | |
 | `repair`        | a damaged tile file                     | `<name>-repaired.mbtiles` with every readable tile | |
+| `index-mbtiles` | an `.mbtiles` without a tile index      | the same file, indexed (restore point kept) | |
 | `check-terrain` | a terrain folder (+ optionally the DEM) | report                          |                   |
 | `check`         | the running stack                       | report (exit code 1 on failure) |                   |
 | `serve`         |                                         | the web pages above             |                   |
+| `tileserver`    | `data/mbtiles`                          | the map tile server (`mbtiles` service) | :8000 |
 
 ## Running
 
@@ -85,16 +87,15 @@ docker compose restart mbtiles
 - `--format auto` (default) writes JPEG tiles, except tiles that contain
   transparent pixels (image edges, irregular drone orthophotos), which stay PNG
   so they are not black around the image. `jpeg`, `png`, `png8`, `webp` force one
-  format. mbtileserver ignores the `.png` in the URL and serves the real type.
+  format. The tile server ignores the `.png` in the URL and serves the real type.
 - Tile folder input is packed as-is. Rows are read as XYZ (OSM/Google);
   use `--scheme tms` for TMS folders.
 - The logviewer requests zoom levels up to 17. If the imagery stops lower, say
-  at 14, mbtileserver answers 404 for 15-17 (the `--missing-image-tile-404` flag
+  at 14, the tile server answers 404 for 15-17 (the `--missing-image-tile-404` flag
   in `docker-compose.yml`) and Cesium enlarges the zoom-14 tiles instead of
   showing nothing.
 - The file is built in `data/.work/` and moved into `data/mbtiles` when it is complete, so
-  mbtileserver (with `ENABLE_FS_WATCH`) loads it straight away and never sees a half-written file.
-  Without fs-watch, restart mbtiles.
+  the tile server never sees a half-written file; it serves the new file within a few seconds.
 - A zip of a tile folder: unpack it on the tools page (**Files**, Unpack), then build from the folder.
 
 ## terrain: DEM to Cesium quantized-mesh
@@ -213,7 +214,7 @@ What happens in each case:
   pixels come out exactly as they were). If the new tiles start at a deeper zoom than the
   file (a tile folder with zoom 12-17, say), the zoomed-out levels are built for the new
   area and merged too (`--no-lower-zooms` to skip). The copy is checked
-  (`PRAGMA quick_check`) and swapped in with one rename; mbtileserver reloads it by itself.
+  (`PRAGMA quick_check`) and swapped in with one rename; the tile server picks it up by itself.
   A raster source is cut into tiles first, exactly as `mbtiles` does.
 - **add-terrain** remakes only the tiles that touch the new DEM (and, deeper than the new
   DEM's last level, only the old tiles it reaches into). The other tiles stay byte-for-byte
@@ -286,6 +287,55 @@ really can't be read are lost. The copy is plain MBTiles (RMaps/OsmAnd/OruxMaps 
 out as MBTiles too), checked with `PRAGMA quick_check`, and listed under Imagery straight
 away. About 6 s per GB on an SSD.
 
+## index-mbtiles: a file without an index
+
+A tile server finds a tile through the index on `tiles(zoom_level, tile_column, tile_row)`.
+Without it, every tile the file doesn't have means reading the whole file: as soon as a map
+shows ground outside the imagery, or zooms past its last level, the server spends its time
+reading gigabytes and maps stall. Files made here have the index; some other tools leave it
+out. The Health tab flags such a file with an **Index** button, or:
+
+```bash
+./gcs-tools index-mbtiles data/mbtiles/custom.mbtiles
+```
+
+Like add-mbtiles it works on a copy in `data/.work`, checks it and swaps it in with a restore
+point. A deduplicated file (map + images tables behind a `tiles` view) becomes a plain
+`tiles` table on the way.
+
+## tileserver: the map tile server
+
+The `mbtiles` service runs `python3 -m gcs_tools.tileserver` from the tools image. It answers
+the same URLs as mbtileserver, which it replaced (`/services`, `/services/<id>`,
+`/services/<id>/tiles/{z}/{x}/{y}.png`, `/services/<id>/map`), plus `/status`. Compared with
+mbtileserver:
+
+- **No file watcher, nothing locked.** Before answering, a request looks at the file (at most
+  once a second). A replaced file is opened and checked next to the old one, and requests move
+  to it only when it opens cleanly. A file that is cut short, still being copied, has a
+  leftover `-journal` or can't be read is reported (log, `/status`, Health tab) while the
+  version opened before keeps being served. New files show up and removed ones disappear
+  within a few seconds. No restart is needed after add-mbtiles, a restore or a copy.
+- **Bounded waits.** At most `--slots` (16) tile reads run at once; a request waits at most
+  `--queue-wait` (10 s) for one and a read may take at most `--read-limit` (8 s); otherwise
+  the answer is `503` with `Retry-After`. mbtileserver queued every request until one of its 10
+  database connections was free, also requests whose browser had long given up, and its
+  requests never timed out: with a slow disk or a file without an index the queue only grew and
+  the server answered nothing, not even its map page, and logged nothing.
+- **It says what is wrong.** The log has a line for every file loaded, replaced or refused (with
+  the reason), files without an index, slow reads, requests turned away, reads stuck on the
+  disk for over 30 s, and read errors. `--verbose` adds every request. `/status` has the same
+  as JSON, which the Health tab shows.
+- Each tile is sent with its own type (a PNG among JPEGs is labelled `image/png`), and
+  `Access-Control-Allow-Origin: *` is set on every answer.
+- It is plain Python and about 5 times slower than mbtileserver at raw throughput: some
+  2000-4000 tiles/s on one core, where a full-screen map needs 20-60 per view.
+
+```bash
+python3 -m gcs_tools tileserver --dir data/mbtiles --port 8000 --missing-image-tile-404
+python3 tests/tileserver_test.py      # its test: answers, replaced/broken/copied files, slow reads
+```
+
 ## check: is everything working?
 
 ```bash
@@ -296,7 +346,7 @@ python3 -m gcs_tools check --host localhost   # without Docker, through the publ
 
 | Server | What is checked |
 |--------|-----------------|
-| Map tiles | tile sets loaded vs `.mbtiles` on disk; a real tile from the middle of each set; the preview map page; missing tiles answer 404; a `custom` set exists |
+| Map tiles | tile sets loaded vs `.mbtiles` on disk, and why a file isn't served; reads stuck on the disk, requests turned away, slow reads (last 15 min); files without an index; a real tile from the middle of each set; the preview map page; missing tiles answer 404; a `custom` set exists |
 | Terrain | `layer.json`; level-0 and deepest tiles are gzip, sent with `Content-Encoding: gzip`, and decode with real heights |
 | Elevation | `.tif` files vs what the server indexed; a height from each piece compared with reading the file directly; a carpet query |
 | Log viewer | the app page and its `/tiles/`, `/quantized/` and `/extensionv2/` proxies |

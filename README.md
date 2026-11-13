@@ -72,7 +72,6 @@ offline-gcs/                      (this git repo)
 ```bash
 docker compose build
 docker save offline-gcs-tools:1.2.0 offline-gcs-elevation offline-gcs-logviewer:v1.0.3 nginx:alpine \
-  ghcr.io/consbio/mbtileserver:latest \
   | gzip > gcs-images.tar.gz          # then on the offline machine: docker load < gcs-images.tar.gz
 ```
 
@@ -88,7 +87,7 @@ the matching command line. The same from a terminal:
 ./gcs-tools elevation /path/to/dem.tif                                   # then: docker compose restart elevation
 ```
 
-mbtileserver picks up new `.mbtiles` files by itself, terrain is static files (hard-refresh the
+The map tile server picks up new `.mbtiles` files by itself, terrain is static files (hard-refresh the
 browser), and the tools page restarts the elevation server for you after cutting pieces. Inputs
 can be any GDAL format and projection. Details and options: [tools/README.md](tools/README.md).
 
@@ -126,6 +125,7 @@ Details: [tools/README.md, Adding an area](tools/README.md#adding-an-area).
 | Map tiles        | http://localhost:8000/services/custom/tiles/{z}/{x}/{y}.png          |
 | Tile map preview | http://localhost:8000/services/custom/map                            |
 | Tile list        | http://localhost:8000/services                                       |
+| Tile server state| http://localhost:8000/status                                         |
 | Terrain          | http://localhost:8011/quantized/layer.json                           |
 | WebTools         | http://localhost:8090/                                               |
 | Elevation API    | http://localhost:8082/elevation/v1/ele/?points=44.6,33.5             |
@@ -145,15 +145,36 @@ curl -sI localhost:8080/quantized/layer.json | head -1
 curl -s "localhost:8082/elevation/v1/ele/?points=44.6,33.5"; echo
 ```
 
+## Map tiles stop loading
+
+Open **Server health** (http://localhost/tools#health). The Map tiles section reads the tile
+server's own status and says what is going on: a file it can't serve and why, a file without
+an index (with an **Index** button), reads stuck on the disk, requests turned away because
+reads are too slow. The server log (button there, or `docker compose logs mbtiles`) has the
+same with times. The tile server can't end up answering nothing: when it can't read fast
+enough it answers `503` within seconds and recovers by itself once the disk keeps up.
+
+If the Health tab says the tile server is fine but a browser on this machine still waits
+forever on `http://localhost:8000/...`, the hold-up is between the browser and the server:
+
+- `curl -m 5 -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/status` in a terminal.
+  If that answers, the browser is waiting on its own connections (it opens at most 6 to one
+  address): close the other tabs showing these maps, or restart the browser.
+- If curl hangs too, Docker's port forwarding for port 8000 is stuck (the server answered the
+  Health tab through Docker's internal network). `docker compose up -d --force-recreate mbtiles`
+  rebuilds the container and its port; if that doesn't help, restart Docker.
+
 ## Notes
 
 - **Firewall**: to reach services from other machines, allow TCP 80, 8000, 8011, 8080, 8082, 8090 on the host.
 - **Tile set name**: the log viewer's Local Imagery layer reads `custom`, so its file is
   `data/mbtiles/custom.mbtiles`. Other names show up as extra tile sets. To use another name, update
   `services/<name>/tiles/` in `logviewer/nginx.conf`.
-- **mbtileserver** runs with `ENABLE_FS_WATCH` (new or replaced files load without a restart) and
-  `--missing-image-tile-404` (when zoomed in past the imagery's last level, the log viewer shows that
-  level enlarged instead of a blank map).
+- **Map tiles** are served by gcs-tools' own tile server (the `mbtiles` service, from the tools
+  image): the same URLs as mbtileserver, which it replaced. New or replaced files are picked up
+  without a restart, and `--missing-image-tile-404` makes the log viewer show the imagery's last
+  level enlarged instead of a blank map when zoomed in past it. Details:
+  [tools/README.md, tileserver](tools/README.md#tileserver-the-map-tile-server).
 - **The tools container has the Docker socket** so its page can show container status and logs and
   restart the elevation server. That gives it control over Docker; remove the socket line in
   `docker-compose.yml` if that isn't acceptable on your network (the page then says what to restart).
@@ -168,8 +189,8 @@ curl -s "localhost:8082/elevation/v1/ele/?points=44.6,33.5"; echo
   the `blueos` branch at `0a6dbc6`. To update: put the new version and its `sha256sum` in
   `logviewer/Dockerfile` and the `image:` tag in `docker-compose.yml`, then
   `docker compose up -d --build logviewer`.
-- **CORS**: mbtileserver sends no CORS headers. Desktop apps (QGIS, Mission Planner, QGC) don't need them.
-  A browser app on another origin does; use the logviewer proxy (`:8080/tiles/`) or ask to add a CORS front.
+- **CORS**: the tile server sends `Access-Control-Allow-Origin: *`, so browser apps on other origins
+  can use the tiles too.
 
 ## Git
 
@@ -182,6 +203,6 @@ curl -s "localhost:8082/elevation/v1/ele/?points=44.6,33.5"; echo
   Commits made inside `open-elevation/` must be pushed to its own remote
   (`cd open-elevation && git push origin master`) before pushing this repo,
   or other clones can't check out the pinned commit.
-- The tools image is pinned (Ubuntu 24.04 GDAL 3.8.4, hash-pinned Python wheel). The server images
-  use `ghcr.io/consbio/mbtileserver:latest` and `nginx:alpine`; pin versions in `docker-compose.yml`
-  if you need those to stay identical too.
+- The tools image is pinned (Ubuntu 24.04 GDAL 3.8.4, hash-pinned Python wheel); the map tile
+  server runs from it too. The other server images use `nginx:alpine`; pin its version in
+  `docker-compose.yml` if you need it to stay identical too.

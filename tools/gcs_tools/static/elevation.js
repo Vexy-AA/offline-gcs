@@ -1,6 +1,6 @@
 'use strict';
 /* global L */
-// Elevation viewer: local imagery from mbtileserver as the base map, heights
+// Elevation viewer: local imagery from the map tile server as the base map, heights
 // from open-elevation (through the tools server, which batches requests).
 
 (function () {

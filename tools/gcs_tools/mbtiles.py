@@ -1,4 +1,4 @@
-"""Build an .mbtiles file for mbtileserver (data/mbtiles/<name>.mbtiles).
+"""Build an .mbtiles file for the map tile server (data/mbtiles/<name>.mbtiles).
 
 Sources:
   raster(s)  GeoTIFF / VRT / JP2 / ... in any CRS (several files are mosaicked).
@@ -7,7 +7,7 @@ Sources:
   tile dir   an existing {z}/{x}/{y}.png|jpg|webp folder (e.g. a SAS.Planet export
              or the old open-elevation data/xyz folder), packed as-is.
 
-mbtileserver serves a tile set as /services/<file name>/tiles/{z}/{x}/{y}.png
+The tile server serves a tile set as /services/<file name>/tiles/{z}/{x}/{y}.png
 (the extension in the URL is ignored, the real image type is sent), so the
 logviewer's "custom" layer needs the file to be called custom.mbtiles.
 """
@@ -74,9 +74,9 @@ def _has_alpha(ds):
 def work_paths(out):
     """Scratch folder and temporary output for building `out`.
 
-    mbtileserver (with fs-watch on) loads every file that appears anywhere in
-    its folder, half-written ones included, so all work happens next to that
-    folder, never inside it: data/mbtiles/x.mbtiles -> data/.work/mbtiles-x/.
+    The tile server loads every .mbtiles file that appears anywhere in its
+    folder, so all work happens next to that folder, never inside it:
+    data/mbtiles/x.mbtiles -> data/.work/mbtiles-x/.
     The finished file is then moved in with one atomic rename.
     """
     out_dir = os.path.dirname(out)
@@ -133,7 +133,7 @@ def raster_to_mbtiles(args):
         print(f"Tiles: zoom {min_zoom}..{max_zoom} ({res:.2f} m/px at the max zoom), {fmt_label} -> {args.out}")
         if max_zoom < 17:
             print(f"  note: the logviewer asks for tiles up to z17; above z{max_zoom} it shows the z{max_zoom} "
-                  "tiles enlarged as long as mbtileserver runs with --missing-image-tile-404 (see docker-compose.yml)")
+                  "tiles enlarged as long as the tile server runs with --missing-image-tile-404 (see docker-compose.yml)")
 
         warp_kw = dict(
             format="VRT", dstSRS="EPSG:3857", xRes=res, yRes=res, targetAlignedPixels=True,
@@ -320,8 +320,8 @@ def hybridize(path, quality, workers):
             if tick.due():
                 print(f"  {min(i + 512, len(rowids))}/{len(rowids)}", flush=True)
     print(f"  {n_jpg} JPEG, {n_png} PNG" + (f", {n_drop} empty dropped" if n_drop else ""))
-    # mbtileserver takes the Content-Type of all tiles from the first row, so put a
-    # JPEG first (browsers and GDAL detect the real image type from the bytes anyway).
+    # mbtileserver took the Content-Type of all tiles from the first row (gcs-tools' tile server
+    # reads each tile's), so put a JPEG first (browsers and GDAL go by the bytes anyway).
     db.executescript("""
         CREATE TABLE tiles_sorted (zoom_level INTEGER NOT NULL, tile_column INTEGER NOT NULL,
             tile_row INTEGER NOT NULL, tile_data BLOB NOT NULL, UNIQUE (zoom_level, tile_column, tile_row));
@@ -437,7 +437,8 @@ def _pack_dir(args, root, tmp_out):
 
     main_fmt = max(formats, key=formats.get)
     if len(formats) > 1:
-        print(f"WARNING: mixed tile formats {formats}; mbtileserver will label all of them as {main_fmt}")
+        print(f"WARNING: mixed tile formats {formats}; mbtileserver would label all of them as {main_fmt} "
+              "(gcs-tools' tile server labels each tile by its own type)")
     x0, x1, y0, y1 = rng[zmax]
     west, north = tile_lonlat(zmax, x0, y0)
     east, south = tile_lonlat(zmax, x1 + 1, y1 + 1)
@@ -510,7 +511,7 @@ def main(argv=None, args=None):
         if not os.path.exists(s) and not s.startswith("/vsi"):
             sys.exit(f"ERROR: input not found: {s}")
     if not args.out.lower().endswith(".mbtiles"):
-        sys.exit("ERROR: output must end with .mbtiles (mbtileserver only loads *.mbtiles)")
+        sys.exit("ERROR: output must end with .mbtiles (the tile server only loads *.mbtiles)")
     if os.path.exists(args.out) and not args.overwrite:
         sys.exit(f"ERROR: {args.out} exists; use --overwrite to replace it")
     args.out = os.path.abspath(args.out)
@@ -528,7 +529,7 @@ def main(argv=None, args=None):
     summarize(args.out)
     tileset = os.path.splitext(os.path.basename(args.out))[0]
     print(f"Tile set id '{tileset}': /services/{tileset}/tiles/{{z}}/{{x}}/{{y}}.png "
-          "(mbtileserver picks it up by itself when fs-watch is on, otherwise restart it)")
+          "(the tile server picks it up by itself within a few seconds)")
 
 
 if __name__ == "__main__":

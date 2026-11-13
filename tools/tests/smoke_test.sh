@@ -64,4 +64,7 @@ if [[ -f "$plotter/build.py" ]]; then
   cmp "$work/plotter/dataflash-log-plotter.html" "$here/../gcs_tools/static/apps/log-plotter.html" && echo "identical"
 fi
 
+echo "== map tile server"
+PYTHON="$py" "$py" "$here/tileserver_test.py" | grep -E "FAIL|PASSED"
+
 echo "SMOKE TEST PASSED"

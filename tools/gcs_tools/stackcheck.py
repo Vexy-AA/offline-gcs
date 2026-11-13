@@ -1,8 +1,9 @@
 """Health check of the running stack: is each server up, did it load its data,
 and does it answer real requests?
 
-  map tiles   tile sets loaded vs files on disk, a real tile from the middle
-              of each set, missing tiles answer 404
+  map tiles   tile sets loaded vs files on disk (and why one isn't), reads
+              stuck or turned away, files without an index, a real tile from
+              the middle of each set, missing tiles answer 404
   terrain     layer.json, level-0 and deepest tiles are gzip + decode, real heights
   elevation   .tif files vs what the server indexed, answers at the centre of
               each file compared with reading the file directly, carpet query
@@ -53,17 +54,20 @@ class Section:
     def __init__(self, sid, title, url=None):
         self.id, self.title, self.url, self.items = sid, title, url, []
 
-    def add(self, status, text, detail=None):
-        self.items.append({"status": status, "text": text, "detail": detail})
+    def add(self, status, text, detail=None, action=None):
+        item = {"status": status, "text": text, "detail": detail}
+        if action:  # a job the tools page offers as a button: {"label", "kind", "params"}
+            item["action"] = action
+        self.items.append(item)
 
     def ok(self, text, detail=None):
         self.add("ok", text, detail)
 
-    def warn(self, text, detail=None):
-        self.add("warn", text, detail)
+    def warn(self, text, detail=None, action=None):
+        self.add("warn", text, detail, action)
 
-    def fail(self, text, detail=None):
-        self.add("fail", text, detail)
+    def fail(self, text, detail=None, action=None):
+        self.add("fail", text, detail, action)
 
     def info(self, text, detail=None):
         self.add("info", text, detail)
@@ -91,6 +95,21 @@ def reason(exc):
     return str(r)
 
 
+def no_answer(exc):
+    """'refused' (nothing listens: not running), 'timeout' (accepted, never answered) or None."""
+    r = getattr(exc, "reason", exc)
+    if isinstance(r, ConnectionRefusedError) or "refused" in str(r).lower():
+        return "refused"
+    if isinstance(r, TimeoutError) or "timed out" in str(r).lower():
+        return "timeout"
+    return None
+
+
+def _ago(t):
+    s = max(0, time.time() - t)
+    return f"{s:.0f} s ago" if s < 120 else f"{s / 60:.0f} min ago" if s < 7200 else f"{s / 3600:.0f} h ago"
+
+
 def xyz_tile(lon, lat, z):
     n = 1 << z
     x = int((lon + 180.0) / 360.0 * n)
@@ -105,12 +124,76 @@ def fmt_bytes(n):
 
 # --------------------------------------------------------------------------
 
+def _tileserver_status(ep, sec):
+    """/status of gcs-tools' tile server, reported into sec. None if the server is another one
+    (mbtileserver has no /status) or didn't answer (then sec says why)."""
+    try:
+        code, _, body = get(ep + "/status", timeout=8)
+    except Exception as e:  # noqa: BLE001
+        kind = no_answer(e)
+        if kind == "refused":
+            sec.fail(f"the tile server is not running at {ep} (connection refused)",
+                     "See the Containers section and the server log; Restart starts it again.")
+        elif kind == "timeout":
+            sec.fail(f"the tile server at {ep} accepts connections but did not answer within 8 s",
+                     "Its status page needs no disk reads, so the server process itself is stuck or overloaded. "
+                     "Restart it. If maps still don't load after that, see 'Map tiles stop loading' in README.md.")
+        else:
+            sec.fail(f"the tile server is not reachable at {ep}: {reason(e)}")
+        return False
+    if code != 200:
+        return None
+    try:
+        st = json.loads(body)
+    except ValueError:
+        return None
+    if st.get("server") != "gcs-tools tileserver":
+        return None
+    busy = st.get("busy", {})
+    if busy.get("stuck"):
+        sec.fail(f"{busy['stuck']} tile reads have been waiting on the disk for over 30 s "
+                 f"(the oldest {busy.get('oldest_read', 0):.0f} s)",
+                 "A read stuck inside the operating system can't be interrupted. The disk is busy (a big copy, "
+                 "a tools job reading or writing gigabytes) or failing. Meanwhile the server answers what it "
+                 "can and turns the rest away (503) instead of hanging; a restart frees it if the disk recovered.")
+    recent = [e for e in st.get("events", []) if time.time() - e.get("t", 0) < 900]
+    latest = {}
+    for e in recent:
+        latest[e["kind"]] = e
+    for kind in ("stuck", "busy", "slow", "read-error", "error"):
+        if kind in latest and not (kind == "stuck" and busy.get("stuck")):
+            e = latest[kind]
+            sec.warn(f"{_ago(e['t'])}: {e['text']}")
+    for ts in st.get("tilesets", []):
+        f = ts.get("file") or ts["id"]
+        if ts.get("problem") and not ts.get("served"):
+            sec.fail(f"{f} is not served: {ts['problem']}",
+                     "The server looks at the file again every few seconds: once it is complete and readable it "
+                     "is served without a restart. Check it on the Files tab to see what is wrong with it.")
+        elif ts.get("problem"):
+            since = f" (since {_ago(ts['problem_since'])})" if ts.get("problem_since") else ""
+            sec.warn(f"{f} on disk can't be served{since}: {ts['problem']}",
+                     "Maps keep showing the version that was opened before, until the file on disk is complete "
+                     "and readable again.")
+        if ts.get("served") and ts.get("indexed") is False:
+            sec.warn(f"{f} has no index on its tile numbers: every tile it doesn't have means reading the "
+                     f"whole file ({fmt_bytes(ts.get('size') or 0)})",
+                     "That makes maps stall as soon as they show ground outside the imagery. Indexing works on a "
+                     "copy and keeps a restore point (gcs-tools index-mbtiles).",
+                     action={"label": f"Index {f}", "kind": "index-mbtiles",
+                             "params": {"tileset": ts["id"]}} if "/" not in ts["id"] else None)
+    return st
+
+
 def check_mbtiles(ep, data_dir, ctx):
     sec = Section("mbtiles", "Map tiles", ep)
+    st = _tileserver_status(ep, sec)
+    if st is False:
+        return sec
     try:
         code, _, body = get(ep + "/services")
     except Exception as e:  # noqa: BLE001
-        sec.fail(f"mbtileserver not reachable at {ep}: {reason(e)}")
+        sec.fail(f"the tile server is not reachable at {ep}: {reason(e)}")
         return sec
     if code != 200:
         sec.fail(f"/services answered HTTP {code}")
@@ -126,7 +209,7 @@ def check_mbtiles(ep, data_dir, ctx):
     on_disk = sorted(os.path.relpath(p, folder)[:-len(".mbtiles")]
                      for p in glob.glob(os.path.join(folder, "**", "*.mbtiles"), recursive=True))
     not_served = [i for i in on_disk if i not in ids]
-    if not_served:
+    if not_served and st is None:  # (gcs-tools' server says why above)
         sec.warn("on disk but not served: " + ", ".join(not_served),
                  "Restart mbtiles. If it is still missing the file is incomplete or not an MBTiles file "
                  "(see the mbtiles container log).")
@@ -157,7 +240,7 @@ def check_mbtiles(ep, data_dir, ctx):
     for tid in ids[:6]:
         try:
             code, _, body = get(f"{ep}/services/{tid}/map")
-            if code == 200 and b"/map/static/index.js" in body:
+            if code == 200 and (b"/map/static/index.js" in body or b"leaflet" in body):
                 sec.ok(f"{tid}: preview map page served", f"/services/{tid}/map")
             else:
                 sec.info(f"{tid}: preview map answered HTTP {code} (preview may be disabled)")
@@ -171,7 +254,7 @@ def check_mbtiles(ep, data_dir, ctx):
                 sec.ok("missing tiles answer 404, so the log viewer enlarges the last zoom level")
             else:
                 sec.warn(f"missing tiles answer HTTP {code} ({h.get('Content-Type')})",
-                         "Start mbtileserver with --missing-image-tile-404 (docker-compose.yml), otherwise the "
+                         "Start the tile server with --missing-image-tile-404 (docker-compose.yml), otherwise the "
                          "map goes blank when zoomed in past the imagery's last level.")
         except Exception as e:  # noqa: BLE001
             sec.warn(f"missing-tile test failed: {reason(e)}")
@@ -434,6 +517,8 @@ def check_containers():
             sec.fail(f"{svc}: not created", "Run docker compose up -d")
         elif c["state"] != "running":
             sec.fail(f"{svc}: {c['state']} ({c['status']})", f"See: docker compose logs {svc}")
+        elif "(unhealthy)" in (c.get("status") or ""):
+            sec.warn(f"{svc}: {c['status']}", f"Its Docker health check fails. See: docker compose logs {svc}")
         elif c.get("restart_count", 0) > 2:
             sec.warn(f"{svc}: {c['status']}, restarted {c['restart_count']} times", f"See: docker compose logs {svc}")
         else:
